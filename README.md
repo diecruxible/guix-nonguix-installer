@@ -1,6 +1,6 @@
 # 🌱 nonguix-guix-installer
 
-Instalador automatizado de **Guix System** con soporte para hardware moderno (vía `nonguix`), Btrfs, hibernación, Flatpak + Discover y Plasma.
+Instalador automatizado de **Guix System** con soporte para hardware moderno (vía `nonguix`), Btrfs, hibernación, Flatpak + Discover para Plasma-desktop y flatpak + gnome-software para los otros escritorios. Los escritorios Plasma, gnome, cinnamon, lxqt, xfce, mate, sway, i3 o ninguno.
 
 > ✅ Diseñado para ejecutarse **directamente desde el ISO live de Nonguix**  
 > ✅ Incluye soporte robusto para **sustitutos precompilados** (¡instalación rápida!)  
@@ -14,7 +14,7 @@ Instalador automatizado de **Guix System** con soporte para hardware moderno (v�
 - ✅ **Hibernación funcional** con swapfile en Btrfs (soluciona `herd start swap` no automático [[26]])
 - ✅ **Canales**: Guix + Nonguix (firmware no libre, drivers, kernel `linux`)
 - ✅ **Sustitutos optimizados**: `ci.guix.gnu.org`, `bordeaux.guix.gnu.org`, `substitutes.nonguix.org`, fallback a `nonguix-proxy.ditigal.xyz`
-- ✅ **Redes ocultas WiFi** vía `nmcli` o `wpa_supplicant`
+- ✅ **Redes ocultas WiFi** vía `connmanctl`
 - ✅ **Configuración "erase your darlings"**: `/persist` para datos persistentes
 - ✅ **Flatpak + Discover** integrado y listo para usar
 
