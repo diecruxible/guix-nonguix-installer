@@ -1,9 +1,9 @@
 #!/bin/bash
 # =============================================================================
-# INSTALADOR PERSONALIZADO DE GUIX SYSTEM CON BTRFS, PLASMA Y NONGUIX - CORREGIDO
+# INSTALADOR PERSONALIZADO DE GUIX SYSTEM CON BTRFS, PLASMA Y NONGUIX - MEJORADO
 # =============================================================================
 # Descripción: Instalador de Guix System optimizado con Btrfs, Plasma Desktop,
-# soporte para redes ocultas, Flatpak + Discover, y configuración "erase your darlings".
+# soporte para redes WiFi/ethernet, Flatpak + Discover, y configuración "erase your darlings".
 # Este script está diseñado para ejecutarse directamente desde el entorno live
 # del ISO de nonguix.
 # =============================================================================
@@ -38,7 +38,6 @@ declare -A DEFAULTS=(
     [desktop]="plasma"
     [use_nonguix]="yes"
     [create_swap]="yes"
-    [swap_size]="8g"
 )
 
 readonly MOUNT_POINT="/mnt"
@@ -49,6 +48,7 @@ ROOT_UUID=""
 EFI_UUID=""
 SSD_OPTION="nossd"
 CREATE_SWAP="no"
+SWAP_SIZE=""
 ENCRYPT_DISK="no"
 LUKS_UUID=""
 ENCRYPTED_NAME="guix-encrypted"
@@ -155,7 +155,7 @@ restart_guix_daemon_with_substitutes() {
 }
 
 # =============================================================================
-# FUNCIONES DE CONFIGURACIÓN DE RED
+# FUNCIONES DE CONFIGURACIÓN DE RED - MEJORADAS CON CONNMANCTL
 # =============================================================================
 check_internet_connection() {
     print_message "$CYAN" "Verificando conexión a internet..."
@@ -173,41 +173,30 @@ show_network_interfaces() {
     echo ""
     ip -br link show | awk '{print "  - " $1 " (" $2 ")"}'
     echo ""
-    ip -br addr show | grep -v "lo" | awk '$3 == "inet" {print "    IP: " $4}'
 }
 
 setup_ethernet_connection() {
-    print_message "$CYAN" "Configurando conexión por cable..."
-    local ethernet_interfaces
-    ethernet_interfaces=$(ip -br link show | grep -E "eth|enp|ens" | awk '{print $1}')
-    if [ -z "$ethernet_interfaces" ]; then
-        print_message "$RED" "No se encontraron interfaces ethernet disponibles."
-        return 1
-    fi
-    local interface
-    if [ "$(echo "$ethernet_interfaces" | wc -l)" -eq 1 ]; then
-        interface="$ethernet_interfaces"
-        print_message "$GREEN" "Usando interfaz: $interface"
-    else
-        print_message "$CYAN" "Seleccione una interfaz ethernet:"
-        select interface in $ethernet_interfaces; do
-            if [ -n "$interface" ]; then
-                break
-            fi
-        done
-    fi
-    print_message "$GREEN" "Activando interfaz $interface..."
+    local interface="$1"
+    print_message "$GREEN" "Configurando conexión por cable en $interface..."
     ip link set "$interface" up
     print_message "$GREEN" "Obteniendo dirección IP por DHCP..."
+    
     if command -v dhclient >/dev/null 2>&1; then
-        dhclient -v "$interface"
+        if dhclient -v "$interface"; then
+            print_message "$GREEN" "Conexión ethernet configurada exitosamente."
+            return 0
+        fi
     elif command -v udhcpc >/dev/null 2>&1; then
-        udhcpc -i "$interface"
+        if udhcpc -i "$interface"; then
+            print_message "$GREEN" "Conexión ethernet configurada exitosamente."
+            return 0
+        fi
     else
-        print_message "$YELLOW" "No se encontró cliente DHCP. Intentando con ip route..."
+        print_message "$YELLOW" "No se encontró cliente DHCP. Intentando configuración manual..."
         ip addr add 192.168.1.100/24 dev "$interface" 2>/dev/null || true
         ip route add default via 192.168.1.1 2>/dev/null || true
     fi
+    
     sleep 2
     if check_internet_connection; then
         print_message "$GREEN" "✓ Conexión ethernet configurada exitosamente"
@@ -218,30 +207,168 @@ setup_ethernet_connection() {
     fi
 }
 
+setup_wifi_connection() {
+    local interface="$1"
+    print_message "$GREEN" "Configurando WiFi en $interface usando connmanctl..."
+    
+    # Asegurar que la interfaz esté activa
+    ip link set "$interface" up
+    
+    # Configurar connmanctl para WiFi
+    connmanctl enable wifi
+    connmanctl scan wifi
+    
+    print_message "$CYAN" "Escaneando redes WiFi disponibles..."
+    sleep 3
+    
+    # Mostrar redes disponibles
+    local networks
+    networks=$(connmanctl services | awk '{print $3}' | grep -v "^$" | sort -u)
+    
+    if [ -z "$networks" ]; then
+        print_message "$RED" "No se encontraron redes WiFi disponibles."
+        return 1
+    fi
+    
+    print_message "$CYAN" "Redes WiFi disponibles:"
+    local i=1
+    local network_array=()
+    while IFS= read -r network; do
+        if [ -n "$network" ]; then
+            echo "  $i. $network"
+            network_array[i]="$network"
+            ((i++))
+        fi
+    done <<< "$networks"
+    
+    local choice
+    read -r -p "Seleccione el número de la red a la que desea conectarse: " choice
+    
+    if [[ ! "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -ge "$i" ]; then
+        print_message "$RED" "Selección inválida."
+        return 1
+    fi
+    
+    local selected_network="${network_array[$choice]}"
+    
+    # Para redes ocultas
+    local hidden_choice
+    hidden_choice=$(prompt_yes_no "¿Es una red oculta?" "no")
+    
+    if [ "$hidden_choice" = "yes" ]; then
+        local hidden_ssid
+        hidden_ssid=$(get_user_input "Ingrese el SSID de la red oculta" "")
+        local password
+        password=$(get_user_input "Contraseña de la red" "" true)
+        
+        # Conectar a red oculta
+        if connmanctl connect "wifi_${hidden_ssid}_managed_psk" --passphrase "$password"; then
+            print_message "$GREEN" "Conexión a red oculta exitosa."
+        else
+            print_message "$RED" "Error al conectar a la red oculta."
+            return 1
+        fi
+    else
+        # Conectar a red visible
+        print_message "$CYAN" "Conectando a $selected_network..."
+        if connmanctl connect "$selected_network"; then
+            print_message "$GREEN" "Conexión WiFi exitosa a $selected_network."
+        else
+            print_message "$RED" "Error al conectar a $selected_network."
+            return 1
+        fi
+    fi
+    
+    sleep 3
+    if check_internet_connection; then
+        print_message "$GREEN" "✓ Conexión WiFi configurada exitosamente"
+        return 0
+    else
+        print_message "$YELLOW" "Conexión WiFi configurada pero sin acceso a internet"
+        return 1
+    fi
+}
+
 setup_network_connection() {
     print_message "$CYAN" "Configuración de conexión a internet"
     echo "================================================================"
     
-    # Primero intentar conectar automáticamente
-    print_message "$CYAN" "Intentando configuración automática de red..."
-    if setup_ethernet_connection; then
-        return 0
+    # Verificar si ya hay conexión
+    if check_internet_connection; then
+        print_message "$GREEN" "Ya tiene una conexión activa."
+        local reconfigure
+        reconfigure=$(prompt_yes_no "¿Desea reconfigurar la conexión?" "no")
+        if [ "$reconfigure" != "yes" ]; then
+            return 0
+        fi
     fi
     
-    # Si falla, mostrar opciones interactivas
     show_network_interfaces
+    
+    # Detectar tipos de interfaces disponibles
+    local ethernet_interfaces
+    ethernet_interfaces=$(ip -br link show | grep -E "eth|enp|ens" | awk '{print $1}')
+    local wifi_interfaces
+    wifi_interfaces=$(ip -br link show | grep -E "wlan|wlp|wlx" | awk '{print $1}')
+    
     print_message "$CYAN" "Seleccione el tipo de conexión:"
     local connection_type
-    select connection_type in "Ethernet (cable)" "Saltar configuración"; do
+    select connection_type in "Ethernet (cable)" "WiFi" "Saltar configuración"; do
         case $connection_type in
             "Ethernet (cable)")
-                if setup_ethernet_connection; then
+                if [ -z "$ethernet_interfaces" ]; then
+                    print_message "$RED" "No se encontraron interfaces ethernet disponibles."
+                    continue
+                fi
+                
+                local interface
+                if [ "$(echo "$ethernet_interfaces" | wc -l)" -eq 1 ]; then
+                    interface="$ethernet_interfaces"
+                    print_message "$GREEN" "Usando interfaz: $interface"
+                else
+                    print_message "$CYAN" "Seleccione una interfaz ethernet:"
+                    select interface in $ethernet_interfaces; do
+                        if [ -n "$interface" ]; then
+                            break
+                        fi
+                    done
+                fi
+                
+                if setup_ethernet_connection "$interface"; then
                     return 0
                 else
                     print_message "$YELLOW" "No se pudo configurar conexión ethernet."
-                    break
+                    continue
                 fi
                 ;;
+                
+            "WiFi")
+                if [ -z "$wifi_interfaces" ]; then
+                    print_message "$RED" "No se encontraron interfaces WiFi disponibles."
+                    continue
+                fi
+                
+                local wifi_interface
+                if [ "$(echo "$wifi_interfaces" | wc -l)" -eq 1 ]; then
+                    wifi_interface="$wifi_interfaces"
+                    print_message "$GREEN" "Usando interfaz WiFi: $wifi_interface"
+                else
+                    print_message "$CYAN" "Seleccione una interfaz WiFi:"
+                    select wifi_interface in $wifi_interfaces; do
+                        if [ -n "$wifi_interface" ]; then
+                            break
+                        fi
+                    done
+                fi
+                
+                if setup_wifi_connection "$wifi_interface"; then
+                    return 0
+                else
+                    print_message "$YELLOW" "No se pudo configurar conexión WiFi."
+                    continue
+                fi
+                ;;
+                
             "Saltar configuración")
                 print_message "$YELLOW" "Advertencia: Sin conexión a internet, la instalación puede fallar o ser muy lenta."
                 local proceed
@@ -252,6 +379,7 @@ setup_network_connection() {
                     continue
                 fi
                 ;;
+                
             *)
                 print_message "$RED" "Opción no válida"
                 ;;
@@ -325,6 +453,76 @@ select_timezone() {
 }
 
 # =============================================================================
+# CONFIGURACIÓN DE SWAP MEJORADA
+# =============================================================================
+configure_swap_settings() {
+    print_message "$CYAN" "Configuración de memoria swap"
+    
+    # Mostrar RAM disponible
+    local ram_size_gb
+    ram_size_gb=$(free -g --si | awk 'FNR == 2 {print $2}')
+    print_message "$GREEN" "RAM disponible en el sistema: ${ram_size_gb}GB"
+    
+    CREATE_SWAP=$(prompt_yes_no "¿Crear archivo swap para hibernación?" "${DEFAULTS[create_swap]}")
+    
+    if [ "$CREATE_SWAP" = "yes" ]; then
+        # Sugerir tamaño basado en la RAM disponible
+        local suggested_swap
+        if [ "$ram_size_gb" -le 8 ]; then
+            suggested_swap="${ram_size_gb}G"
+        else
+            suggested_swap="8G"
+        fi
+        
+        print_message "$YELLOW" "Recomendación: Para hibernación efectiva, el swap debería ser al menos del tamaño de la RAM."
+        print_message "$CYAN" "Tamaños comunes:"
+        echo "  - Mínimo: 2G"
+        echo "  - Recomendado: ${suggested_swap} (basado en su RAM)"
+        echo "  - Máximo: 32G"
+        echo ""
+        
+        SWAP_SIZE=$(get_user_input "Ingrese el tamaño del swap (ej: 8G, 16G)" "$suggested_swap")
+        
+        # Validar formato del tamaño
+        if [[ ! "$SWAP_SIZE" =~ ^[0-9]+[GM]$ ]]; then
+            print_message "$RED" "Formato de tamaño inválido. Usando valor por defecto: $suggested_swap"
+            SWAP_SIZE="$suggested_swap"
+        fi
+        
+        print_message "$GREEN" "Tamaño de swap configurado: $SWAP_SIZE"
+    else
+        SWAP_SIZE=""
+        print_message "$YELLOW" "No se creará archivo swap."
+    fi
+}
+
+configure_swap() {
+    if [ "$CREATE_SWAP" = "yes" ] && [ -n "$SWAP_SIZE" ]; then
+        print_message "$GREEN" "Creando archivo swap de $SWAP_SIZE para hibernación..."
+        mkdir -p "$MOUNT_POINT/swap"
+        
+        print_message "$CYAN" "Creando swapfile de $SWAP_SIZE..."
+        
+        # Crear swapfile usando btrfs
+        if btrfs filesystem mkswapfile --size "$SWAP_SIZE" --uuid clear "$MOUNT_POINT/swap/swapfile"; then
+            chmod 600 "$MOUNT_POINT/swap/swapfile"
+            
+            # Obtener información para hibernación
+            RESUME_UUID=$(blkid -s UUID -o value "$ROOT_PARTITION")
+            RESUME_OFFSET=$(btrfs inspect-internal map-swapfile -r "$MOUNT_POINT/swap/swapfile" 2>/dev/null || echo "0")
+            
+            print_message "$GREEN" "Swapfile creado exitosamente para hibernación"
+            print_message "$CYAN" "UUID de hibernación: $RESUME_UUID"
+            print_message "$CYAN" "Offset de hibernación: $RESUME_OFFSET"
+        else
+            print_message "$YELLOW" "No se pudo crear swapfile. Continuando sin swap."
+            CREATE_SWAP="no"
+            SWAP_SIZE=""
+        fi
+    fi
+}
+
+# =============================================================================
 # FUNCIONES DE ENCRIPTACIÓN
 # =============================================================================
 setup_encryption() {
@@ -380,39 +578,6 @@ setup_encryption() {
 }
 
 # =============================================================================
-# FUNCIONES DE CONFIGURACIÓN DE SWAP E HIBERNACIÓN
-# =============================================================================
-configure_swap() {
-    if [ "$CREATE_SWAP" = "yes" ]; then
-        print_message "$GREEN" "Creando archivo swap para hibernación..."
-        mkdir -p "$MOUNT_POINT/swap"
-        
-        # Tamaño del swapfile basado en la RAM disponible
-        local ram_size_gb
-        ram_size_gb=$(free -g --si | awk 'FNR == 2 {print $2}')
-        local swap_size_gb=$((ram_size_gb < 8 ? ram_size_gb : 8))
-        
-        print_message "$CYAN" "Tamaño de RAM detectado: ${ram_size_gb}GB, creando swapfile de ${swap_size_gb}GB..."
-        
-        # Crear swapfile usando btrfs
-        if btrfs filesystem mkswapfile --size "${swap_size_gb}g" --uuid clear "$MOUNT_POINT/swap/swapfile"; then
-            chmod 600 "$MOUNT_POINT/swap/swapfile"
-            
-            # Obtener información para hibernación
-            RESUME_UUID=$(blkid -s UUID -o value "$ROOT_PARTITION")
-            RESUME_OFFSET=$(btrfs inspect-internal map-swapfile -r "$MOUNT_POINT/swap/swapfile" 2>/dev/null || echo "0")
-            
-            print_message "$GREEN" "Swapfile creado exitosamente para hibernación"
-            print_message "$CYAN" "UUID de hibernación: $RESUME_UUID"
-            print_message "$CYAN" "Offset de hibernación: $RESUME_OFFSET"
-        else
-            print_message "$YELLOW" "No se pudo crear swapfile. Continuando sin swap."
-            CREATE_SWAP="no"
-        fi
-    fi
-}
-
-# =============================================================================
 # FUNCIONES DE OPTIMIZACIONES DEL KERNEL
 # =============================================================================
 configure_grub_optimizations() {
@@ -441,7 +606,7 @@ configure_grub_optimizations() {
 }
 
 # =============================================================================
-# FUNCIONES DE CONFIGURACIÓN DEL SISTEMA - SIMPLIFICADAS
+# FUNCIONES DE CONFIGURACIÓN DEL SISTEMA - MEJORADAS
 # =============================================================================
 generate_guix_config() {
     local config_file="$1"
@@ -470,6 +635,8 @@ generate_guix_config() {
              (gnu packages kde-frameworks)
              (gnu packages kde-plasma)
              (gnu packages flatpak)
+             (gnu packages bash)
+             (gnu packages fish)
              (srfi srfi-1))
 (use-service-modules desktop
                      networking
@@ -477,7 +644,8 @@ generate_guix_config() {
                      audio
                      dbus
                      xorg
-                     sddm)
+                     sddm
+                     flatpak)
 EOF
 
     if [ "$use_nonguix" = "yes" ]; then
@@ -511,6 +679,7 @@ EOF
 EOF
     fi
 
+# shellcheck disable=SC2154
     cat <<EOF
   (bootloader (bootloader-configuration
                (bootloader grub-bootloader)
@@ -545,7 +714,8 @@ EOF
                 (name "$login_name")
                 (comment "Usuario principal")
                 (group "users")
-                (supplementary-groups '("wheel" "netdev" "audio" "video")))
+                (supplementary-groups '("wheel" "netdev" "audio" "video"))
+                (shell #~(string-append #$fish "/bin/fish")))
                %base-user-accounts))
   
   (sudoers-file (plain-file "sudoers"
@@ -557,7 +727,8 @@ EOF
                      (service network-manager-service-type)
                      (service openssh-service-type)
                      (service ntp-service-type)
-                     (service dbus-service-type))
+                     (service dbus-service-type)
+                     (service flatpak-service-type))
 EOF
 
     case "$desktop" in
@@ -589,7 +760,10 @@ EOF
                      firefox
                      neovim
                      btrfs-progs ntfs-3g exfat-utils
-                     flatpak)
+                     flatpak
+                     discover
+                     bash
+                     fish)
 EOF
 
     case "$desktop" in
@@ -597,16 +771,30 @@ EOF
             cat <<EOF
                    (list plasma-framework
                          plasma-workspace
+                         plasma-desktop
                          kate
                          konsole
-                         dolphin)
+                         dolphin
+                         ark
+                         okular
+                         gwenview
+                         spectacle
+                         kcalc
+                         systemsettings
+                         plasma-systemmonitor
+                         kdeconnect
+                         discover)
 EOF
             ;;
         "gnome")
             cat <<EOF
                    (list gnome-shell
                          gnome-terminal
-                         nautilus)
+                         nautilus
+                         gedit
+                         evince
+                         eog
+                         gnome-system-monitor)
 EOF
             ;;
     esac
@@ -728,7 +916,7 @@ setup_disk() {
     mount "${disk_device}${part_prefix}1" "$MOUNT_POINT/boot/efi"
     
     # Configurar swap si se seleccionó
-    if [ "$CREATE_SWAP" = "yes" ]; then
+    if [ "$CREATE_SWAP" = "yes" ] && [ -n "$SWAP_SIZE" ]; then
         mkdir -p "$MOUNT_POINT/swap"
         mount -o "$mount_opts,subvolid=5" "$ROOT_PARTITION" "$MOUNT_POINT/swap"
         configure_swap
@@ -768,7 +956,8 @@ configure_system() {
     local use_nonguix
     use_nonguix=$(prompt_yes_no "¿Usar canal nonguix para firmware no libre?" "${DEFAULTS[use_nonguix]}")
     
-    CREATE_SWAP=$(prompt_yes_no "¿Crear archivo swap para hibernación?" "${DEFAULTS[create_swap]}")
+    # Configuración mejorada del swap
+    configure_swap_settings
     
     # Opción de encriptación
     ENCRYPT_DISK_CHOICE=$(prompt_yes_no "¿Encriptar el disco con LUKS?" "no")
@@ -930,7 +1119,7 @@ check_requirements() {
     fi
     
     # Verificar comandos esenciales
-    local required_commands=("parted" "mkfs.fat" "mkfs.btrfs" "btrfs" "blkid" "lsblk")
+    local required_commands=("parted" "mkfs.fat" "mkfs.btrfs" "btrfs" "blkid" "lsblk" "connmanctl")
     for cmd in "${required_commands[@]}"; do
         if ! command -v "$cmd" >/dev/null 2>&1; then
             print_message "$RED" "Comando requerido '$cmd' no encontrado"
