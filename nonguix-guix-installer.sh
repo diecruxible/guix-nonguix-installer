@@ -31,7 +31,7 @@ readonly NC='\033[0m'
 declare -A DEFAULTS=(
     [lang]="es_CR.UTF-8"
     [timezone]="America/Costa_Rica"
-    [keyboard]="latam"
+    [keyboard]="la-latin1"
     [name]="Usuario"
     [login_name]="usuario"
     [hostname]="guix-system"
@@ -421,7 +421,7 @@ configure_keyboard_layout() {
     local choice
     choice=$(prompt_yes_no "¿Cambiar layout de teclado?" "no")
     if [ "$choice" = "yes" ]; then
-        current_layout=$(get_user_input "Ingrese el layout de teclado" "latam")
+        current_layout=$(get_user_input "Ingrese el layout de teclado" "la-latin1")
         # Probar el layout temporalmente
         if command -v loadkeys >/dev/null 2>&1; then
             loadkeys "$current_layout" 2>/dev/null || true
