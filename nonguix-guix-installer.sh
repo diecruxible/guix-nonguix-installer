@@ -1,9 +1,9 @@
 #!/bin/bash
 # =============================================================================
-# INSTALADOR PERSONALIZADO DE GUIX SYSTEM CON BTRFS, PLASMA Y NONGUIX - MEJORADO
+# INSTALADOR PERSONALIZADO DE GUIX SYSTEM CON BTRFS Y MÚLTIPLES ESCRITORIOS
 # =============================================================================
-# Descripción: Instalador de Guix System optimizado con Btrfs, Plasma Desktop,
-# soporte para redes WiFi/ethernet, Flatpak + Discover, y configuración "erase your darlings".
+# Descripción: Instalador de Guix System optimizado con Btrfs, múltiples
+# entornos de escritorio, soporte para redes, Flatpak y configuración "erase your darlings".
 # Este script está diseñado para ejecutarse directamente desde el entorno live
 # del ISO de nonguix.
 # =============================================================================
@@ -31,7 +31,7 @@ readonly NC='\033[0m'
 declare -A DEFAULTS=(
     [lang]="es_CR.UTF-8"
     [timezone]="America/Costa_Rica"
-    [keyboard]="la-latin1"
+    [keyboard]="latam"
     [name]="Usuario"
     [login_name]="usuario"
     [hostname]="guix-system"
@@ -86,7 +86,7 @@ get_user_input() {
 
 validate_desktop() {
     local desktop="$1"
-    local valid_desktops=("plasma" "gnome" "xfce" "mate" "i3" "sway" "none")
+    local valid_desktops=("plasma" "gnome" "xfce" "mate" "i3" "sway" "cinnamon" "lxqt" "none")
     for valid_desktop in "${valid_desktops[@]}"; do
         if [ "$desktop" = "$valid_desktop" ]; then
             return 0
@@ -155,7 +155,7 @@ restart_guix_daemon_with_substitutes() {
 }
 
 # =============================================================================
-# FUNCIONES DE CONFIGURACIÓN DE RED - MEJORADAS CON CONNMANCTL
+# FUNCIONES DE CONFIGURACIÓN DE RED - MEJORADAS
 # =============================================================================
 check_internet_connection() {
     print_message "$CYAN" "Verificando conexión a internet..."
@@ -295,12 +295,17 @@ setup_network_connection() {
     
     # Verificar si ya hay conexión
     if check_internet_connection; then
-        print_message "$GREEN" "Ya tiene una conexión activa."
+        print_message "$GREEN" "✓ Ya tiene una conexión a internet activa y funcional."
+        print_message "$CYAN" "No es necesario configurar la red."
         local reconfigure
-        reconfigure=$(prompt_yes_no "¿Desea reconfigurar la conexión?" "no")
+        reconfigure=$(prompt_yes_no "¿Desea reconfigurar la conexión de todas formas?" "no")
         if [ "$reconfigure" != "yes" ]; then
             return 0
+        else
+            print_message "$YELLOW" "Reconfigurando conexión..."
         fi
+    else
+        print_message "$YELLOW" "No se detectó conexión a internet. Configurando red..."
     fi
     
     show_network_interfaces
@@ -421,7 +426,7 @@ configure_keyboard_layout() {
     local choice
     choice=$(prompt_yes_no "¿Cambiar layout de teclado?" "no")
     if [ "$choice" = "yes" ]; then
-        current_layout=$(get_user_input "Ingrese el layout de teclado" "la-latin1")
+        current_layout=$(get_user_input "Ingrese el layout de teclado" "latam")
         # Probar el layout temporalmente
         if command -v loadkeys >/dev/null 2>&1; then
             loadkeys "$current_layout" 2>/dev/null || true
@@ -608,6 +613,40 @@ configure_grub_optimizations() {
 # =============================================================================
 # FUNCIONES DE CONFIGURACIÓN DEL SISTEMA - MEJORADAS
 # =============================================================================
+select_desktop_environment() {
+    print_message "$CYAN" "Selección del entorno de escritorio"
+    echo ""
+    print_message "$YELLOW" "Entornos disponibles:"
+    echo ""
+    echo "  1. Plasma (KDE) - Escritorio moderno y altamente personalizable"
+    echo "  2. GNOME - Escritorio elegante y fácil de usar"
+    echo "  3. XFCE - Escritorio ligero y eficiente"
+    echo "  4. MATE - Escritorio tradicional y rápido"
+    echo "  5. Cinnamon - Escritorio moderno inspirado en GNOME 2"
+    echo "  6. LXQt - Escritorio ultra ligero basado en Qt"
+    echo "  7. i3 - Gestor de ventanas en mosaico"
+    echo "  8. Sway - i3 para Wayland"
+    echo "  9. Ninguno (solo línea de comandos)"
+    echo ""
+    
+    local choice
+    while true; do
+        read -r -p "Seleccione una opción (1-9): " choice
+        case $choice in
+            1) echo "plasma"; break ;;
+            2) echo "gnome"; break ;;
+            3) echo "xfce"; break ;;
+            4) echo "mate"; break ;;
+            5) echo "cinnamon"; break ;;
+            6) echo "lxqt"; break ;;
+            7) echo "i3"; break ;;
+            8) echo "sway"; break ;;
+            9) echo "none"; break ;;
+            *) print_message "$RED" "Opción inválida. Por favor seleccione 1-9." ;;
+        esac
+    done
+}
+
 generate_guix_config() {
     local config_file="$1"
     local hostname="$2"
@@ -617,7 +656,7 @@ generate_guix_config() {
     local desktop="$6"
     local use_nonguix="$7"
     local create_swap="$8"
-    local _encrypt_disk="$9"  # Variable intencionalmente no usada - se mantiene por compatibilidad
+    local _encrypt_disk="$9"
     
     # Obtener optimizaciones del kernel
     local kernel_params
@@ -632,9 +671,6 @@ generate_guix_config() {
              (gnu packages web-browsers)
              (gnu packages terminals)
              (gnu packages compression)
-             (gnu packages kde-frameworks)
-             (gnu packages kde-plasma)
-             (gnu packages flatpak)
              (gnu packages bash)
              (gnu packages fish)
              (srfi srfi-1))
@@ -644,9 +680,43 @@ generate_guix_config() {
                      audio
                      dbus
                      xorg
-                     sddm
                      flatpak)
 EOF
+
+    # Agregar módulos específicos del escritorio
+    case "$desktop" in
+        "plasma"|"lxqt")
+            cat <<EOF
+(use-modules (gnu packages kde-frameworks)
+             (gnu packages kde-plasma))
+EOF
+            ;;
+        "gnome")
+            cat <<EOF
+(use-modules (gnu packages gnome))
+EOF
+            ;;
+        "xfce")
+            cat <<EOF
+(use-modules (gnu packages xfce))
+EOF
+            ;;
+        "mate")
+            cat <<EOF
+(use-modules (gnu packages mate))
+EOF
+            ;;
+        "cinnamon")
+            cat <<EOF
+(use-modules (gnu packages cinnamon))
+EOF
+            ;;
+        "i3"|"sway")
+            cat <<EOF
+(use-modules (gnu packages wm))
+EOF
+            ;;
+    esac
 
     if [ "$use_nonguix" = "yes" ]; then
         cat <<EOF
@@ -679,7 +749,6 @@ EOF
 EOF
     fi
 
-# shellcheck disable=SC2154
     cat <<EOF
   (bootloader (bootloader-configuration
                (bootloader grub-bootloader)
@@ -715,7 +784,7 @@ EOF
                 (comment "Usuario principal")
                 (group "users")
                 (supplementary-groups '("wheel" "netdev" "audio" "video"))
-                (shell #~(string-append #$fish "/bin/fish")))
+                (shell (file-append fish "/bin/fish")))
                %base-user-accounts))
   
   (sudoers-file (plain-file "sudoers"
@@ -731,11 +800,13 @@ EOF
                      (service flatpak-service-type))
 EOF
 
+    # Servicios específicos del escritorio
     case "$desktop" in
         "plasma")
             cat <<EOF
                      (service sddm-service-type)
                      (service plasma-desktop-service-type)
+                     (service elogind-service-type)
 EOF
             ;;
         "gnome")
@@ -750,22 +821,52 @@ EOF
                      (service lightdm-service-type)
 EOF
             ;;
+        "mate")
+            cat <<EOF
+                     (service mate-desktop-service-type)
+                     (service lightdm-service-type)
+EOF
+            ;;
+        "cinnamon")
+            cat <<EOF
+                     (service cinnamon-desktop-service-type)
+                     (service lightdm-service-type)
+EOF
+            ;;
+        "lxqt")
+            cat <<EOF
+                     (service lxqt-desktop-service-type)
+                     (service sddm-service-type)
+EOF
+            ;;
+        "i3")
+            cat <<EOF
+                     (service i3-desktop-service-type)
+                     (service lightdm-service-type)
+EOF
+            ;;
+        "sway")
+            cat <<EOF
+                     (service sway-desktop-service-type)
+EOF
+            ;;
     esac
 
     cat <<EOF
-                    ))
+                    %base-services))
   
   (packages (append (list 
+                     ;; Paquetes base esenciales
                      git curl wget nss-certs
                      firefox
                      neovim
                      btrfs-progs ntfs-3g exfat-utils
                      flatpak
-                     discover
                      bash
                      fish)
 EOF
 
+    # Paquetes específicos del escritorio
     case "$desktop" in
         "plasma")
             cat <<EOF
@@ -794,7 +895,85 @@ EOF
                          gedit
                          evince
                          eog
-                         gnome-system-monitor)
+                         gnome-system-monitor
+                         gnome-software)
+EOF
+            ;;
+        "xfce")
+            cat <<EOF
+                   (list xfce4-session
+                         xfce4-panel
+                         xfce4-terminal
+                         thunar
+                         mousepad
+                         xfce4-taskmanager
+                         xfce4-settings
+                         xfce4-power-manager
+                         ristretto
+                         gnome-software)
+EOF
+            ;;
+        "mate")
+            cat <<EOF
+                   (list mate-desktop
+                         mate-panel
+                         mate-terminal
+                         caja
+                         pluma
+                         atril
+                         eom
+                         mate-system-monitor
+                         mate-power-manager
+                         gnome-software)
+EOF
+            ;;
+        "cinnamon")
+            cat <<EOF
+                   (list cinnamon
+                         nemo
+                         gnome-terminal
+                         gedit
+                         evince
+                         eog
+                         gnome-system-monitor
+                         gnome-software)
+EOF
+            ;;
+        "lxqt")
+            cat <<EOF
+                   (list lxqt
+                         qterminal
+                         pcmanfm-qt
+                         featherpad
+                         lxqt-archiver
+                         lxqt-admin
+                         lxqt-config
+                         lxqt-panel
+                         lxqt-session
+                         discover)
+EOF
+            ;;
+        "i3")
+            cat <<EOF
+                   (list i3-wm
+                         i3status
+                         i3lock
+                         rofi
+                         dmenu
+                         feh
+                         picom
+                         rxvt-unicode)
+EOF
+            ;;
+        "sway")
+            cat <<EOF
+                   (list sway
+                         swaylock
+                         swayidle
+                         rofi
+                         waybar
+                         wl-clipboard
+                         foot)
 EOF
             ;;
     esac
@@ -950,8 +1129,9 @@ configure_system() {
     local login_name
     login_name=$(get_user_input "Nombre de usuario" "${DEFAULTS[login_name]}")
     
+    # Selección mejorada del escritorio
     local desktop
-    desktop=$(get_user_input "Entorno de escritorio (plasma/gnome/xfce)" "${DEFAULTS[desktop]}")
+    desktop=$(select_desktop_environment)
     
     local use_nonguix
     use_nonguix=$(prompt_yes_no "¿Usar canal nonguix para firmware no libre?" "${DEFAULTS[use_nonguix]}")
@@ -1184,7 +1364,7 @@ main() {
     check_requirements
     check_system_requirements
     
-    # Configuración de red
+    # Configuración de red - mejorada para conexiones existentes
     if ! setup_network_connection; then
         print_message "$YELLOW" "Continuando sin conexión a internet..."
     fi
