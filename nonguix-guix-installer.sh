@@ -13,10 +13,10 @@ trap 'echo "Error en la línea $LINENO. Ejecutando limpieza..."' ERR
 # =============================================================================
 # CONFIGURACIÓN DE ENTORNO PARA EL LIVE SYSTEM
 # =============================================================================
-export PATH=/run/current-system/profile/bin:/run/current-system/profile/sbin:$PATH
-export GUIX_LOCPATH=/run/current-system/locale
-export LC_ALL=en_US.UTF-8
-export LANG=en_US.UTF-8
+export PATH="/run/current-system/profile/bin:/run/current-system/profile/sbin:$PATH"
+export GUIX_LOCPATH="/run/current-system/locale"
+export LC_ALL="en_US.UTF-8"
+export LANG="en_US.UTF-8"
 
 # =============================================================================
 # CONFIGURACIÓN DE COLORES Y VARIABLES GLOBALES
@@ -59,23 +59,23 @@ RESUME_OFFSET=""
 # FUNCIONES DE UTILIDAD
 # =============================================================================
 print_message() {
-    local color=$1
-    local message=$2
+    local color="$1"
+    local message="$2"
     echo -e "${color}${message}${NC}"
 }
 
 prompt_yes_no() {
-    local prompt=$1
-    local default=${2:-no}
+    local prompt="$1"
+    local default="${2:-no}"
     read -r -p "${prompt} (Por defecto: ${default}) " response
     echo "${response:-$default}"
 }
 
 get_user_input() {
-    local prompt=$1
-    local default=$2
-    local is_password=${3:-false}
-    if [ "$is_password" = true ]; then
+    local prompt="$1"
+    local default="$2"
+    local is_password="${3:-false}"
+    if [ "$is_password" = "true" ]; then
         read -r -s -p "${prompt}: " value
         echo
     else
@@ -85,7 +85,7 @@ get_user_input() {
 }
 
 validate_desktop() {
-    local desktop=$1
+    local desktop="$1"
     local valid_desktops=("plasma" "gnome" "xfce" "mate" "i3" "sway" "none")
     for valid_desktop in "${valid_desktops[@]}"; do
         if [ "$desktop" = "$valid_desktop" ]; then
@@ -96,9 +96,9 @@ validate_desktop() {
 }
 
 detect_ssd() {
-    local disk_device=$1
+    local disk_device="$1"
     local dev_name
-    dev_name=$(basename "$disk_device")
+    dev_name="$(basename "$disk_device")"
     local rotational_path="/sys/block/$dev_name/queue/rotational"
     if [ -f "$rotational_path" ]; then
         if [[ $(< "$rotational_path") == "0" ]]; then
@@ -115,7 +115,7 @@ detect_ssd() {
 }
 
 get_partition_uuid() {
-    local partition=$1
+    local partition="$1"
     if [ -b "$partition" ]; then
         blkid -s UUID -o value "$partition"
     else
@@ -159,7 +159,7 @@ restart_guix_daemon_with_substitutes() {
 # =============================================================================
 check_internet_connection() {
     print_message "$CYAN" "Verificando conexión a internet..."
-    if curl -sfI --max-time 8 https://ci.guix.gnu.org &>/dev/null; then
+    if curl -sfI --max-time 8 https://ci.guix.gnu.org >/dev/null 2>&1; then
         print_message "$GREEN" "✓ Conexión a internet activa"
         return 0
     else
@@ -186,7 +186,7 @@ setup_ethernet_connection() {
     fi
     local interface
     if [ "$(echo "$ethernet_interfaces" | wc -l)" -eq 1 ]; then
-        interface=$ethernet_interfaces
+        interface="$ethernet_interfaces"
         print_message "$GREEN" "Usando interfaz: $interface"
     else
         print_message "$CYAN" "Seleccione una interfaz ethernet:"
@@ -328,7 +328,7 @@ select_timezone() {
 # FUNCIONES DE ENCRIPTACIÓN
 # =============================================================================
 setup_encryption() {
-    local partition=$1
+    local partition="$1"
     print_message "$CYAN" "Configuración de encriptación LUKS"
     local encrypt_choice
     encrypt_choice=$(prompt_yes_no "¿Encriptar el disco con LUKS?" "no")
@@ -341,6 +341,7 @@ setup_encryption() {
         fi
         
         print_message "$CYAN" "Seleccione versión de LUKS:"
+        local luks_opts=""
         select luks_version in "LUKS1 (compatible con GRUB)" "LUKS2 (mejor rendimiento)"; do
             case $luks_version in
                 "LUKS1 (compatible con GRUB)")
@@ -415,9 +416,9 @@ configure_swap() {
 # FUNCIONES DE OPTIMIZACIONES DEL KERNEL
 # =============================================================================
 configure_grub_optimizations() {
-    local hdd_ssd=$1
-    local resume_uuid=$2
-    local resume_offset=$3
+    local hdd_ssd="$1"
+    local resume_uuid="$2"
+    local resume_offset="$3"
     
     local kernel_params="quiet splash"
     
@@ -443,15 +444,15 @@ configure_grub_optimizations() {
 # FUNCIONES DE CONFIGURACIÓN DEL SISTEMA - SIMPLIFICADAS
 # =============================================================================
 generate_guix_config() {
-    local config_file=$1
-    local hostname=$2
-    local timezone=$3
-    local keyboard=$4
-    local login_name=$5
-    local desktop=$6
-    local use_nonguix=$7
-    local create_swap=$8
-    local encrypt_disk=$9
+    local config_file="$1"
+    local hostname="$2"
+    local timezone="$3"
+    local keyboard="$4"
+    local login_name="$5"
+    local desktop="$6"
+    local use_nonguix="$7"
+    local create_swap="$8"
+    local _encrypt_disk="$9"  # Variable intencionalmente no usada - se mantiene por compatibilidad
     
     # Obtener optimizaciones del kernel
     local kernel_params
@@ -618,8 +619,8 @@ EOF
 }
 
 generate_channels_config() {
-    local channels_file=$1
-    local use_nonguix=$2
+    local channels_file="$1"
+    local use_nonguix="$2"
     
     {
     cat <<EOF
@@ -658,7 +659,7 @@ EOF
 # CONFIGURACIÓN DE DISCOS Y PARTICIONES - CORREGIDA
 # =============================================================================
 setup_disk() {
-    local disk_device=$1
+    local disk_device="$1"
     
     print_message "$GREEN" "Particionando el disco $disk_device..."
     
@@ -809,7 +810,10 @@ setup_partitions() {
     print_message "$YELLOW" "ADVERTENCIA: Esto borrará todos los datos en ${disk_device}. ¿Está seguro de continuar?"
     local response
     response=$(prompt_yes_no "¿Continuar con la instalación?" "no")
-    [[ "$response" != "yes" ]] && { print_message "$RED" "Instalación cancelada."; exit 1; }
+    if [ "$response" != "yes" ]; then
+        print_message "$RED" "Instalación cancelada."
+        exit 1
+    fi
     
     setup_disk "$disk_device"
 }
@@ -839,7 +843,7 @@ prepare_guix_installation() {
     
     if [ "$use_nonguix" = "yes" ]; then
         print_message "$CYAN" "Configurando sustitutos nonguix..."
-        if curl -sfI --max-time 3 https://substitutes.nonguix.org &>/dev/null; then
+        if curl -sfI --max-time 3 https://substitutes.nonguix.org >/dev/null 2>&1; then
             substitute_urls="$substitute_urls https://substitutes.nonguix.org"
         else
             substitute_urls="$substitute_urls https://nonguix-proxy.ditigal.xyz"
@@ -874,7 +878,7 @@ install_guix_system() {
     # URLs de sustitutos
     local substitute_urls="https://ci.guix.gnu.org https://bordeaux.guix.gnu.org"
     if [ "$use_nonguix" = "yes" ]; then
-        if curl -sfI --max-time 3 https://substitutes.nonguix.org &>/dev/null; then
+        if curl -sfI --max-time 3 https://substitutes.nonguix.org >/dev/null 2>&1; then
             substitute_urls="$substitute_urls https://substitutes.nonguix.org"
         else
             substitute_urls="$substitute_urls https://nonguix-proxy.ditigal.xyz"
