@@ -24,7 +24,7 @@ Instalador automatizado de **Guix System** con soporte para hardware moderno (v�
 
 - Hardware: ≥2GB RAM, ≥20GB disco (SSD recomendado)
 - Arranque: **UEFI**
-- Medio: ISO live de **Nonguix** (recomendado: [versión más reciente](https://gitlab.com/nonguix/nonguix/-/releases)) o la versión de SystemCrafters (recivar las release pues en el último año no han generado un iso, solamente agregado archivos source.code) (https://github.com/SystemCrafters/guix-installer/releases)
+- Medio: ISO live de **Nonguix** (recomendado: [versión más reciente](https://gitlab.com/nonguix/nonguix/-/releases)) o la versión de SystemCrafters (revisar las release pues en el último año no han generado un iso, solamente agregado archivos source.code) (https://github.com/SystemCrafters/guix-installer/releases)
 
 ---
 
