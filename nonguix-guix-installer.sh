@@ -55,6 +55,7 @@ ENCRYPTED_NAME="guix-encrypted"
 RESUME_UUID=""
 RESUME_OFFSET=""
 DISK_DEVICE=""
+INSTALLATION_DEVICE=""
 
 # =============================================================================
 # FUNCIONES DE UTILIDAD
@@ -122,6 +123,155 @@ get_partition_uuid() {
     else
         print_message "$RED" "Error: Partición $partition no existe o no es válida."
         exit 1
+    fi
+}
+
+# =============================================================================
+# NUEVAS FUNCIONES PARA DETECCIÓN CORRECTA DE DISCOS
+# =============================================================================
+detect_installation_device() {
+    print_message "$CYAN" "Detectando dispositivo de instalación (USB/Live)..."
+    
+    # Método 1: Buscar el dispositivo donde está montado /
+    local root_dev
+    root_dev=$(findmnt -n -o SOURCE / | sed 's/\[.*\]//')
+    
+    if [ -n "$root_dev" ]; then
+        # Extraer el dispositivo base (sin partición)
+        if [[ "$root_dev" =~ ^/dev/[a-z]+([0-9]+|p[0-9]+)$ ]]; then
+            INSTALLATION_DEVICE=$(echo "$root_dev" | sed 's/[0-9]*$//' | sed 's/p$//')
+            print_message "$GREEN" "Dispositivo de instalación detectado: $INSTALLATION_DEVICE"
+            return 0
+        fi
+    fi
+    
+    # Método 2: Buscar por tamaño (asumiendo que el USB es más pequeño)
+    local small_disk
+    small_disk=$(lsblk -d -o NAME,SIZE | grep -E '^[a-z]' | sort -k2 | head -1 | awk '{print "/dev/" $1}')
+    
+    if [ -n "$small_disk" ]; then
+        INSTALLATION_DEVICE="$small_disk"
+        print_message "$YELLOW" "Posible dispositivo de instalación (más pequeño): $INSTALLATION_DEVICE"
+        return 0
+    fi
+    
+    print_message "$YELLOW" "No se pudo detectar automáticamente el dispositivo de instalación"
+    return 1
+}
+
+list_available_disks() {
+    print_message "$CYAN" "Buscando discos disponibles para instalación..."
+    
+    local available_disks=()
+    local disk_info
+    
+    # Usar lsblk para listar discos (excluyendo loop devices y el de instalación)
+    while IFS= read -r disk; do
+        local disk_name
+        disk_name=$(echo "$disk" | awk '{print $1}')
+        local disk_path="/dev/$disk_name"
+        
+        # Excluir el dispositivo de instalación si se detectó
+        if [ -n "$INSTALLATION_DEVICE" ] && [ "$disk_path" = "$INSTALLATION_DEVICE" ]; then
+            continue
+        fi
+        
+        # Excluir dispositivos de solo lectura y loop
+        if [[ "$disk" != *"1"* ]] && [[ "$disk_name" != loop* ]] && [[ "$disk_name" != sr* ]]; then
+            available_disks+=("$disk_path")
+        fi
+    done < <(lsblk -d -o NAME,RO,TYPE,SIZE,MODEL | grep -E 'disk|nvme' | grep -v '^loop')
+    
+    # Si no encontramos discos, mostrar todos los disponibles
+    if [ ${#available_disks[@]} -eq 0 ]; then
+        print_message "$YELLOW" "No se encontraron discos excluyendo el de instalación. Mostrando todos los discos..."
+        while IFS= read -r disk; do
+            local disk_name
+            disk_name=$(echo "$disk" | awk '{print $1}')
+            local disk_path="/dev/$disk_name"
+            
+            if [[ "$disk" != *"1"* ]] && [[ "$disk_name" != loop* ]] && [[ "$disk_name" != sr* ]]; then
+                available_disks+=("$disk_path")
+            fi
+        done < <(lsblk -d -o NAME,RO,TYPE,SIZE,MODEL | grep -E 'disk|nvme' | grep -v '^loop')
+    fi
+    
+    if [ ${#available_disks[@]} -eq 0 ]; then
+        print_message "$RED" "No se encontraron discos disponibles para instalación."
+        return 1
+    fi
+    
+    # Mostrar información detallada de los discos
+    print_message "$GREEN" "Discos disponibles para instalación:"
+    echo ""
+    for disk in "${available_disks[@]}"; do
+        local disk_name
+        disk_name=$(basename "$disk")
+        local disk_info
+        disk_info=$(lsblk -d -o SIZE,MODEL,TRAN "/dev/$disk_name" | tail -1)
+        local disk_size
+        disk_size=$(echo "$disk_info" | awk '{print $1}')
+        local disk_model
+        disk_model=$(echo "$disk_info" | cut -d' ' -f2- | sed 's/[[:space:]]*$//')
+        local disk_transport
+        disk_transport=$(echo "$disk_info" | awk '{print $NF}')
+        
+        if [ "$disk" = "$INSTALLATION_DEVICE" ]; then
+            print_message "$YELLOW" "  $disk - $disk_size - $disk_model ($disk_transport) [INSTALACIÓN]"
+        else
+            print_message "$CYAN" "  $disk - $disk_size - $disk_model ($disk_transport)"
+        fi
+    done
+    echo ""
+    
+    # Devolver array de discos disponibles
+    printf '%s\n' "${available_disks[@]}"
+    return 0
+}
+
+select_disk_interactive() {
+    print_message "$CYAN" "Selección de disco para instalación"
+    echo "================================================================"
+    
+    local available_disks
+    available_disks=$(list_available_disks)
+    
+    if ! available_disks; then
+        return 1
+    fi
+    
+    # Convertir a array
+    local disk_array=()
+    while IFS= read -r disk; do
+        disk_array+=("$disk")
+    done <<< "$available_disks"
+    
+    if [ ${#disk_array[@]} -eq 1 ]; then
+        # Solo un disco disponible
+        local selected_disk="${disk_array[0]}"
+        print_message "$GREEN" "Usando el único disco disponible: $selected_disk"
+        echo "$selected_disk"
+        return 0
+    else
+        # Múltiples discos - selección interactiva
+        print_message "$CYAN" "Seleccione el disco para instalar Guix System:"
+        select selected_disk in "${disk_array[@]}" "Cancelar"; do
+            case $selected_disk in
+                "Cancelar")
+                    print_message "$YELLOW" "Instalación cancelada por el usuario."
+                    exit 0
+                    ;;
+                *)
+                    if [ -n "$selected_disk" ]; then
+                        print_message "$GREEN" "Disco seleccionado: $selected_disk"
+                        echo "$selected_disk"
+                        return 0
+                    else
+                        print_message "$RED" "Selección no válida. Por favor elija una opción."
+                    fi
+                    ;;
+            esac
+        done
     fi
 }
 
@@ -556,37 +706,41 @@ select_timezone() {
 # =============================================================================
 setup_encryption() {
     local partition=$1
-    print_message "$CYAN" "Configurando encriptación LUKS..."
-    
-    print_message "$YELLOW" "ADVERTENCIA: Se encriptará la partición $partition. Todos los datos serán borrados."
-    local confirm
-    confirm=$(prompt_yes_no "¿Está seguro? (yes/no)" "no")
-    if [ "$confirm" != "yes" ]; then
-        return 1
+    print_message "$CYAN" "¿Desea encriptar el disco con LUKS? (yes/no)"
+    local encrypt_choice
+    encrypt_choice=$(prompt_yes_no "Encriptar disco" "no")
+    if [ "$encrypt_choice" = "yes" ]; then
+        print_message "$YELLOW" "ADVERTENCIA: Se encriptará la partición $partition. Todos los datos serán borrados."
+        local confirm
+        confirm=$(prompt_yes_no "¿Está seguro? (yes/no)" "no")
+        if [ "$confirm" != "yes" ]; then
+            return 1
+        fi
+        print_message "$CYAN" "Seleccione versión de LUKS:"
+        select luks_version in "LUKS1 (compatible con GRUB)" "LUKS2 (mejor rendimiento)"; do
+            case $luks_version in
+                "LUKS1 (compatible con GRUB)")
+                    luks_opts="--type luks1"
+                    break
+                    ;;
+                "LUKS2 (mejor rendimiento)")
+                    luks_opts="--type luks2"
+                    break
+                    ;;
+            esac
+        done
+        print_message "$GREEN" "Formateando partición con LUKS..."
+        # shellcheck disable=SC2086
+        cryptsetup luksFormat $luks_opts "$partition"
+        print_message "$GREEN" "Abriendo partición encriptada..."
+        cryptsetup open "$partition" "$ENCRYPTED_NAME"
+        ENCRYPT_DISK="yes"
+        LUKS_UUID=$(blkid -s UUID -o value "$partition")
+        ROOT_PARTITION="/dev/mapper/$ENCRYPTED_NAME"
+        return 0
     fi
-    
-    print_message "$CYAN" "Seleccione versión de LUKS:"
-    select luks_version in "LUKS1 (compatible con GRUB)" "LUKS2 (mejor rendimiento)"; do
-        case $luks_version in
-            "LUKS1 (compatible con GRUB)")
-                luks_opts="--type luks1"
-                break
-                ;;
-            "LUKS2 (mejor rendimiento)")
-                luks_opts="--type luks2"
-                break
-                ;;
-        esac
-    done
-    
-    print_message "$GREEN" "Formateando partición con LUKS..."
-    # shellcheck disable=SC2086
-    cryptsetup luksFormat $luks_opts "$partition"
-    print_message "$GREEN" "Abriendo partición encriptada..."
-    cryptsetup open "$partition" "$ENCRYPTED_NAME"
-    ENCRYPT_DISK="yes"
-    LUKS_UUID=$(blkid -s UUID -o value "$partition")
-    ROOT_PARTITION="/dev/mapper/$ENCRYPTED_NAME"
+    ENCRYPT_DISK="no"
+    ROOT_PARTITION="$partition"
     return 0
 }
 
@@ -685,17 +839,14 @@ generate_guix_config() {
     local use_nonguix=$7
     local create_swap=$8
     local encrypt_disk=$9
-    
     # Cargar variables de hibernación si existen
     if [ -f "$MOUNT_POINT/etc/guix-install-vars" ]; then
         # shellcheck disable=SC1091
         source "$MOUNT_POINT/etc/guix-install-vars"
     fi
-    
     # Obtener optimizaciones del kernel con soporte para hibernación
     local kernel_params
     kernel_params=$(configure_grub_optimizations "$SSD_OPTION" "$RESUME_UUID" "$RESUME_OFFSET")
-    
     {
     cat <<EOF
 (use-modules (gnu)
@@ -724,7 +875,6 @@ generate_guix_config() {
                      sddm
                      flatpak)
 EOF
-
     if [ "$use_nonguix" = "yes" ]; then
         cat <<EOF
 (use-modules (nongnu packages linux)
@@ -732,7 +882,6 @@ EOF
              (nongnu system linux-initrd))
 EOF
     fi
-
     cat <<EOF
 (operating-system
   (host-name "$hostname")
@@ -746,7 +895,6 @@ EOF
           (source "es_CR")
           (name "es_CR.utf8"))))
 EOF
-
     if [ "$use_nonguix" = "yes" ]; then
         cat <<EOF
   (kernel linux)
@@ -773,18 +921,16 @@ EOF
                          %base-initrd-modules))
 EOF
     fi
-
     cat <<EOF
   (bootloader (bootloader-configuration
                (bootloader grub-bootloader)
-               (targets (list "$DISK_DEVICE"))
+               (targets '("/dev/sda"))
                (keyboard-layout (keyboard-layout "$keyboard"))
                (bootloader-extra-arguments
                 '(("GRUB_CMDLINE_LINUX_DEFAULT" . "\"$kernel_params\"")))))
   (keyboard-layout (keyboard-layout "$keyboard"))
   (file-systems (append (list 
 EOF
-
     # Configuración de filesystems
     cat <<EOF
                         (file-system
@@ -836,7 +982,6 @@ EOF
                           (options "rw,relatime,fmask=0022,dmask=0022,codepage=437,iocharset=utf8,shortname=mixed,utf8,errors=remount-ro")
                           (needed-for-boot? #t))
 EOF
-
     if [ "$create_swap" = "yes" ]; then
         cat <<EOF
                         (file-system
@@ -853,7 +998,6 @@ EOF
                           (needed-for-boot? #t))
 EOF
     fi
-
     cat <<EOF
                         %base-file-systems))
   (users (cons (user-account
@@ -880,7 +1024,6 @@ EOF
                                     (xorg-configuration
                                      (keyboard-layout (keyboard-layout "$keyboard")))))
 EOF
-
     case "$desktop" in
         "plasma")
             cat <<EOF
@@ -927,7 +1070,6 @@ EOF
 EOF
             ;;
     esac
-
     cat <<EOF
                      (service pipewire-service-type)
                      (service alsa-service-type)
@@ -947,7 +1089,6 @@ EOF
                      intel-ucode  # Microcódigo para CPU
                      (specification->package "glibc-locales")))
 EOF
-
     case "$desktop" in
         "plasma")
             cat <<EOF
@@ -1018,7 +1159,6 @@ EOF
 EOF
             ;;
     esac
-
     cat <<EOF
                    %base-packages))
   (name-service-switch %mdns-host-lookup-nss)
@@ -1042,7 +1182,6 @@ generate_channels_config() {
           (openpgp-fingerprint
            "BBB0 2DDF 2CEA F6A8 0D1D  E643 A2A0 6DF2 A33A 54FA"))))
 EOF
-
     if [ "$use_nonguix" = "yes" ]; then
         cat <<EOF
        (channel
@@ -1056,7 +1195,6 @@ EOF
               "2A39 3FFF 68F4 EF7A 3D29  12AF 6F51 20A0 22FB B2D5"))))
 EOF
     fi
-
     cat <<EOF
        %default-channels)
 EOF
@@ -1064,7 +1202,7 @@ EOF
 }
 
 # =============================================================================
-# CONFIGURACIÓN DE DISCOS Y PARTICIONES
+# CONFIGURACIÓN DE DISCOS Y PARTICIONES - MODIFICADA
 # =============================================================================
 setup_disk() {
     local disk_device=$1
@@ -1077,16 +1215,22 @@ setup_disk() {
         part_prefix="p"
     fi
     
+    # Verificar que el disco no es el de instalación
+    if [ "$disk_device" = "$INSTALLATION_DEVICE" ]; then
+        print_message "$RED" "ERROR: Está intentando instalar en el mismo dispositivo de instalación."
+        print_message "$RED" "Esto borraría el sistema live y la instalación fallaría."
+        print_message "$YELLOW" "Por favor seleccione un disco diferente al USB de instalación."
+        return 1
+    fi
+    
     detect_ssd "$disk_device"
     print_message "$GREEN" "Particionando el disco $disk_device..."
     parted "$disk_device" --script -- mklabel gpt
     parted "$disk_device" --script -- mkpart ESP fat32 1MiB 551MiB
     parted "$disk_device" --script -- set 1 esp on
     parted "$disk_device" --script -- mkpart root btrfs 551MiB 100%
-    
     print_message "$GREEN" "Formateando particiones..."
     mkfs.fat -F 32 -n ESP "${disk_device}${part_prefix}1"
-    
     # Configurar encriptación si se seleccionó
     if [ "$ENCRYPT_DISK_CHOICE" = "yes" ]; then
         setup_encryption "${disk_device}${part_prefix}2"
@@ -1094,27 +1238,21 @@ setup_disk() {
         mkfs.btrfs -f -L guix-root "${disk_device}${part_prefix}2"
         ROOT_PARTITION="${disk_device}${part_prefix}2"
     fi
-    
     print_message "$GREEN" "Montando y creando subvolúmenes..."
     mkdir -p "$MOUNT_POINT"
     mount "$ROOT_PARTITION" "$MOUNT_POINT"
-    
     local subvolumes=("@root" "@home" "@guix" "@var_log" "@persist" "@vartmp")
     if [ "$CREATE_SWAP" = "yes" ]; then
         subvolumes+=("@swap")
     fi
-    
     for subvol in "${subvolumes[@]}"; do
         btrfs subvolume create "$MOUNT_POINT/$subvol"
     done
-    
     btrfs subvolume snapshot -r "$MOUNT_POINT/@root" "$MOUNT_POINT/@root-blank"
     umount "$MOUNT_POINT"
-    
     local mount_opts="rw,relatime,compress=zstd:3,$SSD_OPTION"
     print_message "$GREEN" "Montando subvolúmenes..."
     mount -o "$mount_opts,subvol=@root" "$ROOT_PARTITION" "$MOUNT_POINT"
-    
     local mount_points=(
         "home:@home"
         "var/guix:@guix"
@@ -1126,7 +1264,6 @@ setup_disk() {
     if [ "$CREATE_SWAP" = "yes" ]; then
         mount_points+=("swap:@swap")
     fi
-    
     for mount_point in "${mount_points[@]}"; do
         IFS=':' read -r dir subvol <<< "$mount_point"
         mkdir -p "$MOUNT_POINT/$dir"
@@ -1137,14 +1274,11 @@ setup_disk() {
             mount -o "$mount_opts,subvol=$subvol" "$ROOT_PARTITION" "$MOUNT_POINT/$dir"
         fi
     done
-    
     if [ "$CREATE_SWAP" = "yes" ]; then
         configure_swap
     fi
-    
     EFI_UUID=$(get_partition_uuid "${disk_device}${part_prefix}1")
     ROOT_UUID=$(get_partition_uuid "$ROOT_PARTITION")
-    
     print_message "$GREEN" "Estructura de discos configurada correctamente."
     print_message "$CYAN" "UUID EFI: $EFI_UUID"
     print_message "$CYAN" "UUID Root: $ROOT_UUID"
@@ -1171,16 +1305,13 @@ configure_system() {
         local use_nonguix
         use_nonguix=$(get_user_input "¿Usar canal nonguix para firmware no libre?" "${DEFAULTS[use_nonguix]}")
         CREATE_SWAP=$(prompt_yes_no "¿Crear archivo swap para hibernación?" "${DEFAULTS[create_swap]}")
-        
         # Opción de encriptación
         print_message "$CYAN" "Configuración de seguridad:"
         ENCRYPT_DISK_CHOICE=$(prompt_yes_no "¿Encriptar el disco con LUKS?" "no")
-        
         if ! validate_desktop "$desktop"; then
             print_message "$RED" "Entorno de escritorio no válido. Usando valor por defecto: ${DEFAULTS[desktop]}"
             desktop="${DEFAULTS[desktop]}"
         fi
-        
         mkdir -p "$GUIX_CONFIG_DIR"
         print_message "$GREEN" "Generando configuración de Guix..."
         generate_guix_config "$GUIX_CONFIG_DIR/system.scm" "$hostname" "$timezone" \
@@ -1195,8 +1326,37 @@ setup_partitions() {
     local self_hardware
     self_hardware=$(prompt_yes_no "¿Desea modificar la configuración de hardware manualmente?" "no")
     if [ "$self_hardware" = "no" ]; then
-        print_message "$CYAN" "Discos disponibles:"
-        lsblk -o NAME,SIZE,TYPE,MOUNTPOINTS,FSTYPE
+        print_message "$CYAN" "Buscando discos disponibles..."
+        
+        # Usar la nueva función de selección de disco
+        local selected_disk
+        selected_disk=$(select_disk_interactive)
+        
+        if [ -z "$selected_disk" ]; then
+            print_message "$RED" "No se seleccionó ningún disco. Instalación cancelada."
+            exit 1
+        fi
+        
+        # Confirmación final
+        print_message "$YELLOW" "================================================================"
+        print_message "$YELLOW" "¡ADVERTENCIA CRÍTICA!"
+        print_message "$YELLOW" "Esto borrará TODOS los datos en: $selected_disk"
+        print_message "$YELLOW" "No podrá recuperar los datos después de esta operación."
+        print_message "$YELLOW" "================================================================"
+        
+        local final_confirmation
+        final_confirmation=$(prompt_yes_no "¿Está ABSOLUTAMENTE seguro de continuar?" "no")
+        if [ "$final_confirmation" != "yes" ]; then
+            print_message "$YELLOW" "Instalación cancelada por el usuario."
+            exit 0
+        fi
+        
+        setup_disk "$selected_disk"
+    else
+        # Modo manual - mostrar todos los discos
+        print_message "$CYAN" "Todos los dispositivos de bloque disponibles:"
+        lsblk -o NAME,SIZE,TYPE,MOUNTPOINTS,FSTYPE,MODEL
+        
         local disk_device=""
         while true; do
             print_message "$CYAN" "Por favor ingrese el dispositivo de disco a usar (ejemplo: /dev/nvme0n1 o /dev/sda):"
@@ -1206,6 +1366,18 @@ setup_partitions() {
             fi
             print_message "$RED" "Dispositivo no válido. Por favor ingrese un dispositivo de bloque válido."
         done
+        
+        # Verificar que no es el dispositivo de instalación
+        if [ "$disk_device" = "$INSTALLATION_DEVICE" ]; then
+            print_message "$RED" "ERROR: Está intentando instalar en el dispositivo de instalación."
+            print_message "$RED" "Esto borraría el sistema live y la instalación fallaría."
+            local proceed_anyway
+            proceed_anyway=$(prompt_yes_no "¿Continuar de todas formas? (NO RECOMENDADO)" "no")
+            if [ "$proceed_anyway" != "yes" ]; then
+                exit 1
+            fi
+        fi
+        
         print_message "$YELLOW" "ADVERTENCIA: Esto borrará todos los datos en ${disk_device}. ¿Está seguro de continuar? (yes/no)"
         read -r response
         [[ "$response" != "yes" ]] && { print_message "$RED" "Instalación cancelada."; exit 1; }
@@ -1422,6 +1594,10 @@ robust_cleanup() {
 # =============================================================================
 main() {
     trap robust_cleanup EXIT
+    
+    # Detectar dispositivo de instalación al inicio
+    detect_installation_device
+    
     check_requirements
     check_system_requirements
     if ! setup_network_connection; then
