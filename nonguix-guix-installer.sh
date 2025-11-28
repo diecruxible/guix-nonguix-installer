@@ -508,15 +508,8 @@ setup_network_connection() {
 # =============================================================================
 check_system_requirements() {
     print_message "$CYAN" "Verificando requisitos del sistema..."
-    # Verificar espacio en disco
-    local required_space_gb=20
-    local available_space_gb
-    available_space_gb=$(df -BG / | awk 'NR==2 {print $4}' | tr -d 'G')
-    if [ "$available_space_gb" -lt "$required_space_gb" ]; then
-        print_message "$RED" "ERROR: Se requieren al menos ${required_space_gb}GB de espacio libre."
-        print_message "$YELLOW" "Espacio disponible: ${available_space_gb}GB"
-        exit 1
-    fi
+    # ✅ REMOVIDO: verificación de espacio en disco (irrelevante)
+
     # Verificar RAM mínima
     local required_ram_gb=2
     local available_ram_gb
@@ -1456,6 +1449,7 @@ check_requirements() {
         read -r -p "¿Continuar de todas formas? (yes/no) " response
         [[ "$response" != "yes" ]] && exit 1
     fi
+    # ✅ REMOVIDO: verificación de espacio libre en /
 }
 # =============================================================================
 # LIMPIEZA ROBUSTA
