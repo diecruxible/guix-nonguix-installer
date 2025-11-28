@@ -54,6 +54,7 @@ LUKS_UUID=""
 ENCRYPTED_NAME="guix-encrypted"
 RESUME_UUID=""
 RESUME_OFFSET=""
+DISK_DEVICE=""
 
 # =============================================================================
 # FUNCIONES DE UTILIDAD
@@ -555,41 +556,37 @@ select_timezone() {
 # =============================================================================
 setup_encryption() {
     local partition=$1
-    print_message "$CYAN" "¿Desea encriptar el disco con LUKS? (yes/no)"
-    local encrypt_choice
-    encrypt_choice=$(prompt_yes_no "Encriptar disco" "no")
-    if [ "$encrypt_choice" = "yes" ]; then
-        print_message "$YELLOW" "ADVERTENCIA: Se encriptará la partición $partition. Todos los datos serán borrados."
-        local confirm
-        confirm=$(prompt_yes_no "¿Está seguro? (yes/no)" "no")
-        if [ "$confirm" != "yes" ]; then
-            return 1
-        fi
-        print_message "$CYAN" "Seleccione versión de LUKS:"
-        select luks_version in "LUKS1 (compatible con GRUB)" "LUKS2 (mejor rendimiento)"; do
-            case $luks_version in
-                "LUKS1 (compatible con GRUB)")
-                    luks_opts="--type luks1"
-                    break
-                    ;;
-                "LUKS2 (mejor rendimiento)")
-                    luks_opts="--type luks2"
-                    break
-                    ;;
-            esac
-        done
-        print_message "$GREEN" "Formateando partición con LUKS..."
-        # shellcheck disable=SC2086
-        cryptsetup luksFormat $luks_opts "$partition"
-        print_message "$GREEN" "Abriendo partición encriptada..."
-        cryptsetup open "$partition" "$ENCRYPTED_NAME"
-        ENCRYPT_DISK="yes"
-        LUKS_UUID=$(blkid -s UUID -o value "$partition")
-        ROOT_PARTITION="/dev/mapper/$ENCRYPTED_NAME"
-        return 0
+    print_message "$CYAN" "Configurando encriptación LUKS..."
+    
+    print_message "$YELLOW" "ADVERTENCIA: Se encriptará la partición $partition. Todos los datos serán borrados."
+    local confirm
+    confirm=$(prompt_yes_no "¿Está seguro? (yes/no)" "no")
+    if [ "$confirm" != "yes" ]; then
+        return 1
     fi
-    ENCRYPT_DISK="no"
-    ROOT_PARTITION="$partition"
+    
+    print_message "$CYAN" "Seleccione versión de LUKS:"
+    select luks_version in "LUKS1 (compatible con GRUB)" "LUKS2 (mejor rendimiento)"; do
+        case $luks_version in
+            "LUKS1 (compatible con GRUB)")
+                luks_opts="--type luks1"
+                break
+                ;;
+            "LUKS2 (mejor rendimiento)")
+                luks_opts="--type luks2"
+                break
+                ;;
+        esac
+    done
+    
+    print_message "$GREEN" "Formateando partición con LUKS..."
+    # shellcheck disable=SC2086
+    cryptsetup luksFormat $luks_opts "$partition"
+    print_message "$GREEN" "Abriendo partición encriptada..."
+    cryptsetup open "$partition" "$ENCRYPTED_NAME"
+    ENCRYPT_DISK="yes"
+    LUKS_UUID=$(blkid -s UUID -o value "$partition")
+    ROOT_PARTITION="/dev/mapper/$ENCRYPTED_NAME"
     return 0
 }
 
@@ -688,14 +685,17 @@ generate_guix_config() {
     local use_nonguix=$7
     local create_swap=$8
     local encrypt_disk=$9
+    
     # Cargar variables de hibernación si existen
     if [ -f "$MOUNT_POINT/etc/guix-install-vars" ]; then
         # shellcheck disable=SC1091
         source "$MOUNT_POINT/etc/guix-install-vars"
     fi
+    
     # Obtener optimizaciones del kernel con soporte para hibernación
     local kernel_params
     kernel_params=$(configure_grub_optimizations "$SSD_OPTION" "$RESUME_UUID" "$RESUME_OFFSET")
+    
     {
     cat <<EOF
 (use-modules (gnu)
@@ -724,6 +724,7 @@ generate_guix_config() {
                      sddm
                      flatpak)
 EOF
+
     if [ "$use_nonguix" = "yes" ]; then
         cat <<EOF
 (use-modules (nongnu packages linux)
@@ -731,6 +732,7 @@ EOF
              (nongnu system linux-initrd))
 EOF
     fi
+
     cat <<EOF
 (operating-system
   (host-name "$hostname")
@@ -744,6 +746,7 @@ EOF
           (source "es_CR")
           (name "es_CR.utf8"))))
 EOF
+
     if [ "$use_nonguix" = "yes" ]; then
         cat <<EOF
   (kernel linux)
@@ -770,16 +773,18 @@ EOF
                          %base-initrd-modules))
 EOF
     fi
+
     cat <<EOF
   (bootloader (bootloader-configuration
                (bootloader grub-bootloader)
-               (targets '("/dev/sda"))
+               (targets (list "$DISK_DEVICE"))
                (keyboard-layout (keyboard-layout "$keyboard"))
                (bootloader-extra-arguments
                 '(("GRUB_CMDLINE_LINUX_DEFAULT" . "\"$kernel_params\"")))))
   (keyboard-layout (keyboard-layout "$keyboard"))
   (file-systems (append (list 
 EOF
+
     # Configuración de filesystems
     cat <<EOF
                         (file-system
@@ -831,6 +836,7 @@ EOF
                           (options "rw,relatime,fmask=0022,dmask=0022,codepage=437,iocharset=utf8,shortname=mixed,utf8,errors=remount-ro")
                           (needed-for-boot? #t))
 EOF
+
     if [ "$create_swap" = "yes" ]; then
         cat <<EOF
                         (file-system
@@ -847,6 +853,7 @@ EOF
                           (needed-for-boot? #t))
 EOF
     fi
+
     cat <<EOF
                         %base-file-systems))
   (users (cons (user-account
@@ -873,6 +880,7 @@ EOF
                                     (xorg-configuration
                                      (keyboard-layout (keyboard-layout "$keyboard")))))
 EOF
+
     case "$desktop" in
         "plasma")
             cat <<EOF
@@ -919,6 +927,7 @@ EOF
 EOF
             ;;
     esac
+
     cat <<EOF
                      (service pipewire-service-type)
                      (service alsa-service-type)
@@ -938,6 +947,7 @@ EOF
                      intel-ucode  # Microcódigo para CPU
                      (specification->package "glibc-locales")))
 EOF
+
     case "$desktop" in
         "plasma")
             cat <<EOF
@@ -1008,6 +1018,7 @@ EOF
 EOF
             ;;
     esac
+
     cat <<EOF
                    %base-packages))
   (name-service-switch %mdns-host-lookup-nss)
@@ -1031,6 +1042,7 @@ generate_channels_config() {
           (openpgp-fingerprint
            "BBB0 2DDF 2CEA F6A8 0D1D  E643 A2A0 6DF2 A33A 54FA"))))
 EOF
+
     if [ "$use_nonguix" = "yes" ]; then
         cat <<EOF
        (channel
@@ -1044,6 +1056,7 @@ EOF
               "2A39 3FFF 68F4 EF7A 3D29  12AF 6F51 20A0 22FB B2D5"))))
 EOF
     fi
+
     cat <<EOF
        %default-channels)
 EOF
@@ -1055,20 +1068,25 @@ EOF
 # =============================================================================
 setup_disk() {
     local disk_device=$1
+    DISK_DEVICE="$disk_device"  # Guardar para uso en configuración
+    
     local dev_name
     dev_name=$(basename "$disk_device")
     local part_prefix=""
     if [[ "${dev_name: -1}" =~ [0-9] ]]; then
         part_prefix="p"
     fi
+    
     detect_ssd "$disk_device"
     print_message "$GREEN" "Particionando el disco $disk_device..."
     parted "$disk_device" --script -- mklabel gpt
     parted "$disk_device" --script -- mkpart ESP fat32 1MiB 551MiB
     parted "$disk_device" --script -- set 1 esp on
     parted "$disk_device" --script -- mkpart root btrfs 551MiB 100%
+    
     print_message "$GREEN" "Formateando particiones..."
     mkfs.fat -F 32 -n ESP "${disk_device}${part_prefix}1"
+    
     # Configurar encriptación si se seleccionó
     if [ "$ENCRYPT_DISK_CHOICE" = "yes" ]; then
         setup_encryption "${disk_device}${part_prefix}2"
@@ -1076,21 +1094,27 @@ setup_disk() {
         mkfs.btrfs -f -L guix-root "${disk_device}${part_prefix}2"
         ROOT_PARTITION="${disk_device}${part_prefix}2"
     fi
+    
     print_message "$GREEN" "Montando y creando subvolúmenes..."
     mkdir -p "$MOUNT_POINT"
     mount "$ROOT_PARTITION" "$MOUNT_POINT"
+    
     local subvolumes=("@root" "@home" "@guix" "@var_log" "@persist" "@vartmp")
     if [ "$CREATE_SWAP" = "yes" ]; then
         subvolumes+=("@swap")
     fi
+    
     for subvol in "${subvolumes[@]}"; do
         btrfs subvolume create "$MOUNT_POINT/$subvol"
     done
+    
     btrfs subvolume snapshot -r "$MOUNT_POINT/@root" "$MOUNT_POINT/@root-blank"
     umount "$MOUNT_POINT"
+    
     local mount_opts="rw,relatime,compress=zstd:3,$SSD_OPTION"
     print_message "$GREEN" "Montando subvolúmenes..."
-    mount -o "$mount_opts,subvol=@root" "${disk_device}${part_prefix}2" "$MOUNT_POINT"
+    mount -o "$mount_opts,subvol=@root" "$ROOT_PARTITION" "$MOUNT_POINT"
+    
     local mount_points=(
         "home:@home"
         "var/guix:@guix"
@@ -1102,6 +1126,7 @@ setup_disk() {
     if [ "$CREATE_SWAP" = "yes" ]; then
         mount_points+=("swap:@swap")
     fi
+    
     for mount_point in "${mount_points[@]}"; do
         IFS=':' read -r dir subvol <<< "$mount_point"
         mkdir -p "$MOUNT_POINT/$dir"
@@ -1109,18 +1134,21 @@ setup_disk() {
             mount -o "rw,relatime,fmask=0022,dmask=0022,codepage=437,iocharset=utf8,shortname=mixed,utf8,errors=remount-ro" \
                   "${disk_device}${part_prefix}1" "$MOUNT_POINT/$dir"
         else
-            mount -o "$mount_opts,subvol=$subvol" "${disk_device}${part_prefix}2" "$MOUNT_POINT/$dir"
+            mount -o "$mount_opts,subvol=$subvol" "$ROOT_PARTITION" "$MOUNT_POINT/$dir"
         fi
     done
+    
     if [ "$CREATE_SWAP" = "yes" ]; then
         configure_swap
     fi
+    
     EFI_UUID=$(get_partition_uuid "${disk_device}${part_prefix}1")
     ROOT_UUID=$(get_partition_uuid "$ROOT_PARTITION")
+    
     print_message "$GREEN" "Estructura de discos configurada correctamente."
     print_message "$CYAN" "UUID EFI: $EFI_UUID"
     print_message "$CYAN" "UUID Root: $ROOT_UUID"
-    print_message "$CYAN" "Opción SSD: $SSD_OPTION"
+    print_message "$CYAN" "Disco: $DISK_DEVICE"
 }
 
 # =============================================================================
@@ -1128,7 +1156,7 @@ setup_disk() {
 # =============================================================================
 configure_system() {
     local self_conf
-    self_conf=$(prompt_yes_no "¿Desea modificar la configuración manualmente?")
+    self_conf=$(prompt_yes_no "¿Desea modificar la configuración manualmente?" "no")
     if [ "$self_conf" = "no" ]; then
         local hostname
         hostname=$(get_user_input "Nombre del equipo" "${DEFAULTS[hostname]}")
@@ -1143,13 +1171,16 @@ configure_system() {
         local use_nonguix
         use_nonguix=$(get_user_input "¿Usar canal nonguix para firmware no libre?" "${DEFAULTS[use_nonguix]}")
         CREATE_SWAP=$(prompt_yes_no "¿Crear archivo swap para hibernación?" "${DEFAULTS[create_swap]}")
+        
         # Opción de encriptación
         print_message "$CYAN" "Configuración de seguridad:"
         ENCRYPT_DISK_CHOICE=$(prompt_yes_no "¿Encriptar el disco con LUKS?" "no")
+        
         if ! validate_desktop "$desktop"; then
             print_message "$RED" "Entorno de escritorio no válido. Usando valor por defecto: ${DEFAULTS[desktop]}"
             desktop="${DEFAULTS[desktop]}"
         fi
+        
         mkdir -p "$GUIX_CONFIG_DIR"
         print_message "$GREEN" "Generando configuración de Guix..."
         generate_guix_config "$GUIX_CONFIG_DIR/system.scm" "$hostname" "$timezone" \
@@ -1162,7 +1193,7 @@ configure_system() {
 
 setup_partitions() {
     local self_hardware
-    self_hardware=$(prompt_yes_no "¿Desea modificar la configuración de hardware manualmente?")
+    self_hardware=$(prompt_yes_no "¿Desea modificar la configuración de hardware manualmente?" "no")
     if [ "$self_hardware" = "no" ]; then
         print_message "$CYAN" "Discos disponibles:"
         lsblk -o NAME,SIZE,TYPE,MOUNTPOINTS,FSTYPE
@@ -1183,7 +1214,7 @@ setup_partitions() {
 }
 
 # =============================================================================
-# PREPARACIÓN DE INSTALACIÓN - VERSIÓN CORREGIDA
+# PREPARACIÓN DE INSTALACIÓN - VERSIÓN CORREGIDA CON COW-STORE
 # =============================================================================
 prepare_guix_installation() {
     print_message "$GREEN" "Preparando instalación de Guix..."
@@ -1218,6 +1249,15 @@ prepare_guix_installation() {
         exit 1
     fi
     
+    # ✅ CORRECCIÓN CRÍTICA: Inicializar cow-store (como en Systemcrafters)
+    print_message "$GREEN" "Inicializando cow-store en $MOUNT_POINT..."
+    if ! herd start cow-store "$MOUNT_POINT"; then
+        print_message "$RED" "ERROR: No se pudo inicializar cow-store en $MOUNT_POINT"
+        print_message "$YELLOW" "Esto es necesario para que Guix pueda construir el sistema"
+        exit 1
+    fi
+    print_message "$GREEN" "✓ cow-store inicializado correctamente"
+    
     print_message "$GREEN" "Configurando el daemon de Guix..."
     mkdir -p "$MOUNT_POINT/var/guix/profiles/per-user/root"
     chown -R root:root "$MOUNT_POINT/var/guix"
@@ -1250,6 +1290,7 @@ prepare_guix_installation() {
     print_message "$CYAN" "Verificación final de archivos de configuración:"
     print_message "$GREEN" "✓ system.scm: $MOUNT_POINT/etc/system.scm"
     print_message "$GREEN" "✓ channels.scm: $MOUNT_POINT/etc/channels.scm"
+    print_message "$GREEN" "✓ cow-store: inicializado en $MOUNT_POINT"
     
     if [ -f "$MOUNT_POINT/etc/guix-install-vars" ]; then
         print_message "$GREEN" "✓ Variables de instalación: $MOUNT_POINT/etc/guix-install-vars"
@@ -1338,6 +1379,13 @@ check_requirements() {
 # =============================================================================
 robust_cleanup() {
     print_message "$YELLOW" "Realizando limpieza exhaustiva..."
+    
+    # ✅ CORRECCIÓN: Detener cow-store si está activo
+    if herd status cow-store >/dev/null 2>&1; then
+        print_message "$CYAN" "Deteniendo cow-store..."
+        herd stop cow-store 2>/dev/null || true
+    fi
+    
     # Cerrar particiones encriptadas
     if [ "$ENCRYPT_DISK" = "yes" ] && [ -b "/dev/mapper/$ENCRYPTED_NAME" ]; then
         cryptsetup close "$ENCRYPTED_NAME" || true
