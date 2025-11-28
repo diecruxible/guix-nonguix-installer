@@ -9,7 +9,6 @@
 # =============================================================================
 set -euo pipefail
 trap 'echo "Error en la línea $LINENO"' ERR
-
 # =============================================================================
 # CONFIGURACIÓN DE ENTORNO PARA EL LIVE SYSTEM
 # =============================================================================
@@ -17,7 +16,6 @@ export PATH=/run/current-system/profile/bin:/run/current-system/profile/sbin:$PA
 export GUIX_LOCPATH=/run/current-system/locale
 export LC_ALL=en_US.UTF-8
 export LANG=en_US.UTF-8
-
 # =============================================================================
 # CONFIGURACIÓN DE COLORES Y VARIABLES GLOBALES
 # =============================================================================
@@ -26,7 +24,6 @@ readonly GREEN='\033[0;32m'
 readonly YELLOW='\033[1;33m'
 readonly CYAN='\033[0;36m'
 readonly NC='\033[0m'
-
 # Configuración por defecto
 declare -A DEFAULTS=(
     [lang]="es_CR.UTF-8"
@@ -40,10 +37,8 @@ declare -A DEFAULTS=(
     [create_swap]="yes"
     [swap_size]="8g"
 )
-
 readonly MOUNT_POINT="/mnt"
 readonly GUIX_CONFIG_DIR="$MOUNT_POINT/etc/config"
-
 # Variables globales para UUIDs (serán establecidas durante la instalación)
 ROOT_UUID=""
 EFI_UUID=""
@@ -56,7 +51,6 @@ RESUME_UUID=""
 RESUME_OFFSET=""
 DISK_DEVICE=""
 INSTALLATION_DEVICE=""
-
 # =============================================================================
 # FUNCIONES DE UTILIDAD
 # =============================================================================
@@ -65,14 +59,12 @@ print_message() {
     local message=$2
     echo -e "${color}${message}${NC}"
 }
-
 prompt_yes_no() {
     local prompt=$1
     local default=${2:-no}
     read -r -p "${prompt} (Por defecto: ${default}) " response
     echo "${response:-$default}"
 }
-
 get_user_input() {
     local prompt=$1
     local default=$2
@@ -85,7 +77,6 @@ get_user_input() {
     fi
     echo "${value:-$default}"
 }
-
 validate_desktop() {
     local desktop=$1
     local valid_desktops=("plasma" "gnome" "xfce" "mate" "i3" "sway" "none")
@@ -96,7 +87,6 @@ validate_desktop() {
     done
     return 1
 }
-
 detect_ssd() {
     local disk_device=$1
     local dev_name
@@ -115,7 +105,6 @@ detect_ssd() {
         print_message "$YELLOW" "No se pudo detectar tipo de disco. Usando configuración estándar."
     fi
 }
-
 get_partition_uuid() {
     local partition=$1
     if [ -b "$partition" ]; then
@@ -125,17 +114,14 @@ get_partition_uuid() {
         exit 1
     fi
 }
-
 # =============================================================================
 # NUEVAS FUNCIONES PARA DETECCIÓN CORRECTA DE DISCOS
 # =============================================================================
 detect_installation_device() {
     print_message "$CYAN" "Detectando dispositivo de instalación (USB/Live)..."
-    
     # Método 1: Buscar el dispositivo donde está montado /
     local root_dev
     root_dev=$(findmnt -n -o SOURCE / | sed 's/\[.*\]//')
-    
     if [ -n "$root_dev" ]; then
         # Extraer el dispositivo base (sin partición)
         if [[ "$root_dev" =~ ^/dev/[a-z]+([0-9]+|p[0-9]+)$ ]]; then
@@ -144,44 +130,35 @@ detect_installation_device() {
             return 0
         fi
     fi
-    
     # Método 2: Buscar por tamaño (asumiendo que el USB es más pequeño)
     local small_disk
     small_disk=$(lsblk -d -o NAME,SIZE | grep -E '^[a-z]' | sort -k2 | head -1 | awk '{print "/dev/" $1}')
-    
     if [ -n "$small_disk" ]; then
         INSTALLATION_DEVICE="$small_disk"
         print_message "$YELLOW" "Posible dispositivo de instalación (más pequeño): $INSTALLATION_DEVICE"
         return 0
     fi
-    
     print_message "$YELLOW" "No se pudo detectar automáticamente el dispositivo de instalación"
     return 1
 }
-
 list_available_disks() {
     print_message "$CYAN" "Buscando discos disponibles para instalación..."
-    
     local available_disks=()
     local disk_info
-    
     # Usar lsblk para listar discos (excluyendo loop devices y el de instalación)
     while IFS= read -r disk; do
         local disk_name
         disk_name=$(echo "$disk" | awk '{print $1}')
         local disk_path="/dev/$disk_name"
-        
         # Excluir el dispositivo de instalación si se detectó
         if [ -n "$INSTALLATION_DEVICE" ] && [ "$disk_path" = "$INSTALLATION_DEVICE" ]; then
             continue
         fi
-        
         # Excluir dispositivos de solo lectura y loop
         if [[ "$disk" != *"1"* ]] && [[ "$disk_name" != loop* ]] && [[ "$disk_name" != sr* ]]; then
             available_disks+=("$disk_path")
         fi
     done < <(lsblk -d -o NAME,RO,TYPE,SIZE,MODEL | grep -E 'disk|nvme' | grep -v '^loop')
-    
     # Si no encontramos discos, mostrar todos los disponibles
     if [ ${#available_disks[@]} -eq 0 ]; then
         print_message "$YELLOW" "No se encontraron discos excluyendo el de instalación. Mostrando todos los discos..."
@@ -189,18 +166,15 @@ list_available_disks() {
             local disk_name
             disk_name=$(echo "$disk" | awk '{print $1}')
             local disk_path="/dev/$disk_name"
-            
             if [[ "$disk" != *"1"* ]] && [[ "$disk_name" != loop* ]] && [[ "$disk_name" != sr* ]]; then
                 available_disks+=("$disk_path")
             fi
         done < <(lsblk -d -o NAME,RO,TYPE,SIZE,MODEL | grep -E 'disk|nvme' | grep -v '^loop')
     fi
-    
     if [ ${#available_disks[@]} -eq 0 ]; then
         print_message "$RED" "No se encontraron discos disponibles para instalación."
         return 1
     fi
-    
     # Mostrar información detallada de los discos
     print_message "$GREEN" "Discos disponibles para instalación:"
     echo ""
@@ -215,7 +189,6 @@ list_available_disks() {
         disk_model=$(echo "$disk_info" | cut -d' ' -f2- | sed 's/[[:space:]]*$//')
         local disk_transport
         disk_transport=$(echo "$disk_info" | awk '{print $NF}')
-        
         if [ "$disk" = "$INSTALLATION_DEVICE" ]; then
             print_message "$YELLOW" "  $disk - $disk_size - $disk_model ($disk_transport) [INSTALACIÓN]"
         else
@@ -223,29 +196,23 @@ list_available_disks() {
         fi
     done
     echo ""
-    
     # Devolver array de discos disponibles
     printf '%s\n' "${available_disks[@]}"
     return 0
 }
-
 select_disk_interactive() {
     print_message "$CYAN" "Selección de disco para instalación"
     echo "================================================================"
-    
     local available_disks
     available_disks=$(list_available_disks)
-    
     if ! available_disks; then
         return 1
     fi
-    
     # Convertir a array
     local disk_array=()
     while IFS= read -r disk; do
         disk_array+=("$disk")
     done <<< "$available_disks"
-    
     if [ ${#disk_array[@]} -eq 1 ]; then
         # Solo un disco disponible
         local selected_disk="${disk_array[0]}"
@@ -274,7 +241,6 @@ select_disk_interactive() {
         done
     fi
 }
-
 # =============================================================================
 # FUNCIONES PARA SOPORTE DE SUSTITUTOS (NONGUIX)
 # =============================================================================
@@ -292,7 +258,6 @@ authorize_nonguix_key() {
         print_message "$GREEN" "✓ Clave de nonguix autorizada"
     fi
 }
-
 restart_guix_daemon_with_substitutes() {
     local substitute_urls="$1"
     print_message "$CYAN" "Reiniciando guix-daemon con soporte para sustitutos..."
@@ -302,7 +267,6 @@ restart_guix_daemon_with_substitutes() {
         print_message "$YELLOW" "No se pudo reiniciar guix-daemon con sustitutos. Continuando sin daemon."
     fi
 }
-
 # =============================================================================
 # FUNCIONES DE CONFIGURACIÓN DE RED
 # =============================================================================
@@ -316,7 +280,6 @@ check_internet_connection() {
         return 1
     fi
 }
-
 show_network_interfaces() {
     print_message "$CYAN" "Interfaces de red disponibles:"
     echo ""
@@ -324,7 +287,6 @@ show_network_interfaces() {
     echo ""
     ip -br addr show | grep -v "lo" | awk '$3 == "inet" {print "    IP: " $4}'
 }
-
 setup_ethernet_connection() {
     print_message "$CYAN" "Configurando conexión por cable..."
     local ethernet_interfaces
@@ -366,7 +328,6 @@ setup_ethernet_connection() {
         return 1
     fi
 }
-
 scan_wifi_networks() {
     local interface=$1
     print_message "$CYAN" "Escaneando redes WiFi disponibles..."
@@ -387,7 +348,6 @@ scan_wifi_networks() {
     echo ""
     return 0
 }
-
 connect_to_wifi() {
     local interface=$1
     local ssid=$2
@@ -409,7 +369,6 @@ connect_to_wifi() {
     fi
     return 0
 }
-
 connect_to_hidden_wifi() {
     local interface=$1
     local ssid=$2
@@ -443,7 +402,6 @@ EOF
     fi
     return 0
 }
-
 setup_wifi_connection() {
     print_message "$CYAN" "Configurando conexión WiFi..."
     local wifi_interfaces
@@ -503,7 +461,6 @@ setup_wifi_connection() {
         return 1
     fi
 }
-
 setup_network_connection() {
     print_message "$CYAN" "Configuración de conexión a internet"
     echo "================================================================"
@@ -546,7 +503,6 @@ setup_network_connection() {
     done
     return 1
 }
-
 # =============================================================================
 # FUNCIONES DE DETECCIÓN DE REQUISITOS
 # =============================================================================
@@ -576,7 +532,6 @@ check_system_requirements() {
     fi
     print_message "$GREEN" "✓ Requisitos del sistema verificados"
 }
-
 # =============================================================================
 # FUNCIONES DE SELECCIÓN INTERACTIVA
 # =============================================================================
@@ -605,7 +560,6 @@ select_keyboard_layout() {
         esac
     done
 }
-
 configure_keyboard_layout() {
     local current_layout="${DEFAULTS[keyboard]}"
     while true; do
@@ -629,7 +583,6 @@ configure_keyboard_layout() {
     done
     echo "$current_layout"
 }
-
 select_timezone_interactive() {
     print_message "$CYAN" "Seleccione su continente:"
     local continents=(
@@ -662,7 +615,6 @@ select_timezone_interactive() {
         fi
     done
 }
-
 select_timezone() {
     print_message "$CYAN" "Seleccione su zona horaria:"
     # Intentar interfaz interactiva primero
@@ -700,7 +652,6 @@ select_timezone() {
         echo "$selected_tz"
     fi
 }
-
 # =============================================================================
 # FUNCIONES DE ENCRIPTACIÓN
 # =============================================================================
@@ -743,9 +694,8 @@ setup_encryption() {
     ROOT_PARTITION="$partition"
     return 0
 }
-
 # =============================================================================
-# FUNCIONES DE CONFIGURACIÓN DE SWAP E HIBERNACIÓN
+# FUNCIONES DE CONFIGURACIÓN DE SWAP E HIBERNACIÓN (CORREGIDO)
 # =============================================================================
 configure_swap() {
     if [ "$CREATE_SWAP" = "yes" ]; then
@@ -765,10 +715,10 @@ configure_swap() {
         RESUME_UUID_TEMP=$(blkid -s UUID -o value "$ROOT_UUID")
         local RESUME_OFFSET_TEMP
         RESUME_OFFSET_TEMP=$(btrfs inspect-internal map-swapfile -r "$MOUNT_POINT/swap/swapfile" 2>/dev/null || echo "0")
-        # Guardar valores para usar en la configuración del kernel
+        # ✅ CORRECCIÓN SC2153: Guardar como número entero sin "g"
         echo "RESUME_UUID=$RESUME_UUID_TEMP" > "$MOUNT_POINT/etc/guix-install-vars"
         echo "RESUME_OFFSET=$RESUME_OFFSET_TEMP" >> "$MOUNT_POINT/etc/guix-install-vars"
-        echo "SWAP_SIZE=${swap_size_gb}g" >> "$MOUNT_POINT/etc/guix-install-vars"
+        echo "SWAP_SIZE_GB=$swap_size_gb" >> "$MOUNT_POINT/etc/guix-install-vars"
         RESUME_UUID="$RESUME_UUID_TEMP"
         RESUME_OFFSET="$RESUME_OFFSET_TEMP"
         print_message "$GREEN" "Swapfile creado exitosamente para hibernación"
@@ -776,7 +726,6 @@ configure_swap() {
         print_message "$CYAN" "Offset de hibernación: $RESUME_OFFSET"
     fi
 }
-
 check_hibernation_support() {
     print_message "$CYAN" "Verificando soporte para hibernación..."
     if [ "$CREATE_SWAP" != "yes" ]; then
@@ -786,8 +735,16 @@ check_hibernation_support() {
     # Verificar tamaño del swapfile
     local ram_size_gb
     ram_size_gb=$(free -g --si | awk 'FNR == 2 {print $2}')
-    if [ "$SWAP_SIZE" -lt "$ram_size_gb" ]; then
-        print_message "$YELLOW" "ADVERTENCIA: El swapfile (${SWAP_SIZE}GB) es menor que la RAM (${ram_size_gb}GB)"
+    # ✅ CORRECCIÓN SC2153: Leer la variable correcta
+    local swap_size_gb=0
+    if [ -f "$MOUNT_POINT/etc/guix-install-vars" ]; then
+        # shellcheck disable=SC1091
+        # shellcheck source=/dev/null
+        source "$MOUNT_POINT/etc/guix-install-vars"
+        swap_size_gb="$SWAP_SIZE_GB"
+    fi
+    if [ "$swap_size_gb" -lt "$ram_size_gb" ]; then
+        print_message "$YELLOW" "ADVERTENCIA: El swapfile (${swap_size_gb}GB) es menor que la RAM (${ram_size_gb}GB)"
         print_message "$YELLOW" "La hibernación puede no funcionar correctamente"
         local proceed
         proceed=$(prompt_yes_no "¿Desea continuar de todas formas? (yes/no)" "yes")
@@ -798,7 +755,6 @@ check_hibernation_support() {
     print_message "$GREEN" "✓ Soporte para hibernación verificado"
     return 0
 }
-
 # =============================================================================
 # FUNCIONES DE OPTIMIZACIONES DEL KERNEL
 # =============================================================================
@@ -825,7 +781,6 @@ configure_grub_optimizations() {
     fi
     echo "$kernel_params"
 }
-
 # =============================================================================
 # FUNCIONES DE CONFIGURACIÓN DEL SISTEMA
 # =============================================================================
@@ -1166,7 +1121,6 @@ EOF
 EOF
     } > "$config_file"
 }
-
 generate_channels_config() {
     local channels_file=$1
     local use_nonguix=$2
@@ -1200,21 +1154,18 @@ EOF
 EOF
     } > "$channels_file"
 }
-
 # =============================================================================
 # CONFIGURACIÓN DE DISCOS Y PARTICIONES - MODIFICADA
 # =============================================================================
 setup_disk() {
     local disk_device=$1
     DISK_DEVICE="$disk_device"  # Guardar para uso en configuración
-    
     local dev_name
     dev_name=$(basename "$disk_device")
     local part_prefix=""
     if [[ "${dev_name: -1}" =~ [0-9] ]]; then
         part_prefix="p"
     fi
-    
     # Verificar que el disco no es el de instalación
     if [ "$disk_device" = "$INSTALLATION_DEVICE" ]; then
         print_message "$RED" "ERROR: Está intentando instalar en el mismo dispositivo de instalación."
@@ -1222,7 +1173,6 @@ setup_disk() {
         print_message "$YELLOW" "Por favor seleccione un disco diferente al USB de instalación."
         return 1
     fi
-    
     detect_ssd "$disk_device"
     print_message "$GREEN" "Particionando el disco $disk_device..."
     parted "$disk_device" --script -- mklabel gpt
@@ -1284,7 +1234,6 @@ setup_disk() {
     print_message "$CYAN" "UUID Root: $ROOT_UUID"
     print_message "$CYAN" "Disco: $DISK_DEVICE"
 }
-
 # =============================================================================
 # CONFIGURACIÓN DEL SISTEMA Y USUARIO
 # =============================================================================
@@ -1321,42 +1270,35 @@ configure_system() {
         print_message "$GREEN" "Configuraciones generadas en $GUIX_CONFIG_DIR/"
     fi
 }
-
 setup_partitions() {
     local self_hardware
     self_hardware=$(prompt_yes_no "¿Desea modificar la configuración de hardware manualmente?" "no")
     if [ "$self_hardware" = "no" ]; then
         print_message "$CYAN" "Buscando discos disponibles..."
-        
         # Usar la nueva función de selección de disco
         local selected_disk
         selected_disk=$(select_disk_interactive)
-        
         if [ -z "$selected_disk" ]; then
             print_message "$RED" "No se seleccionó ningún disco. Instalación cancelada."
             exit 1
         fi
-        
         # Confirmación final
         print_message "$YELLOW" "================================================================"
         print_message "$YELLOW" "¡ADVERTENCIA CRÍTICA!"
         print_message "$YELLOW" "Esto borrará TODOS los datos en: $selected_disk"
         print_message "$YELLOW" "No podrá recuperar los datos después de esta operación."
         print_message "$YELLOW" "================================================================"
-        
         local final_confirmation
         final_confirmation=$(prompt_yes_no "¿Está ABSOLUTAMENTE seguro de continuar?" "no")
         if [ "$final_confirmation" != "yes" ]; then
             print_message "$YELLOW" "Instalación cancelada por el usuario."
             exit 0
         fi
-        
         setup_disk "$selected_disk"
     else
         # Modo manual - mostrar todos los discos
         print_message "$CYAN" "Todos los dispositivos de bloque disponibles:"
         lsblk -o NAME,SIZE,TYPE,MOUNTPOINTS,FSTYPE,MODEL
-        
         local disk_device=""
         while true; do
             print_message "$CYAN" "Por favor ingrese el dispositivo de disco a usar (ejemplo: /dev/nvme0n1 o /dev/sda):"
@@ -1366,7 +1308,6 @@ setup_partitions() {
             fi
             print_message "$RED" "Dispositivo no válido. Por favor ingrese un dispositivo de bloque válido."
         done
-        
         # Verificar que no es el dispositivo de instalación
         if [ "$disk_device" = "$INSTALLATION_DEVICE" ]; then
             print_message "$RED" "ERROR: Está intentando instalar en el dispositivo de instalación."
@@ -1377,24 +1318,20 @@ setup_partitions() {
                 exit 1
             fi
         fi
-        
         print_message "$YELLOW" "ADVERTENCIA: Esto borrará todos los datos en ${disk_device}. ¿Está seguro de continuar? (yes/no)"
         read -r response
         [[ "$response" != "yes" ]] && { print_message "$RED" "Instalación cancelada."; exit 1; }
         setup_disk "$disk_device"
     fi
 }
-
 # =============================================================================
 # PREPARACIÓN DE INSTALACIÓN - VERSIÓN CORREGIDA CON COW-STORE
 # =============================================================================
 prepare_guix_installation() {
     print_message "$GREEN" "Preparando instalación de Guix..."
-    
     # Crear directorios esenciales
     mkdir -p "$MOUNT_POINT/etc"
     mkdir -p "$MOUNT_POINT/var/guix"
-    
     # ✅ CORRECCIÓN CRÍTICA: Copiar configuraciones a /mnt/etc/
     if [ -f "$GUIX_CONFIG_DIR/system.scm" ]; then
         cp "$GUIX_CONFIG_DIR/system.scm" "$MOUNT_POINT/etc/system.scm"
@@ -1404,7 +1341,6 @@ prepare_guix_installation() {
         print_message "$YELLOW" "Por favor, ejecute primero la configuración del sistema"
         exit 1
     fi
-    
     if [ -f "$GUIX_CONFIG_DIR/channels.scm" ]; then
         cp "$GUIX_CONFIG_DIR/channels.scm" "$MOUNT_POINT/etc/channels.scm"
         print_message "$GREEN" "✓ channels.scm copiado a $MOUNT_POINT/etc/"
@@ -1412,7 +1348,6 @@ prepare_guix_installation() {
         print_message "$RED" "ERROR: No se encontró $GUIX_CONFIG_DIR/channels.scm"
         exit 1
     fi
-    
     # Verificar que los archivos están en la ubicación correcta
     if [ ! -f "$MOUNT_POINT/etc/system.scm" ] || [ ! -f "$MOUNT_POINT/etc/channels.scm" ]; then
         print_message "$RED" "ERROR: Los archivos de configuración no se copiaron correctamente"
@@ -1420,7 +1355,6 @@ prepare_guix_installation() {
         ls -la "$MOUNT_POINT/etc/" || true
         exit 1
     fi
-    
     # ✅ CORRECCIÓN CRÍTICA: Inicializar cow-store (como en Systemcrafters)
     print_message "$GREEN" "Inicializando cow-store en $MOUNT_POINT..."
     if ! herd start cow-store "$MOUNT_POINT"; then
@@ -1429,15 +1363,12 @@ prepare_guix_installation() {
         exit 1
     fi
     print_message "$GREEN" "✓ cow-store inicializado correctamente"
-    
     print_message "$GREEN" "Configurando el daemon de Guix..."
     mkdir -p "$MOUNT_POINT/var/guix/profiles/per-user/root"
     chown -R root:root "$MOUNT_POINT/var/guix"
     chmod -R 755 "$MOUNT_POINT/var/guix"
-    
     # Configurar sustitutos
     authorize_nonguix_key
-    
     local substitute_urls="https://ci.guix.gnu.org https://bordeaux.guix.gnu.org"
     if [ "$use_nonguix" = "yes" ]; then
         if curl -sfI --max-time 3 https://substitutes.nonguix.org &>/dev/null; then
@@ -1448,27 +1379,22 @@ prepare_guix_installation() {
             print_message "$YELLOW" "substitutes.nonguix.org no accesible. Usando mirror: nonguix-proxy.ditigal.xyz"
         fi
     fi
-    
     restart_guix_daemon_with_substitutes "$substitute_urls"
-    
     print_message "$GREEN" "Verificando conexión a internet..."
     if ! check_internet_connection; then
         print_message "$YELLOW" "No se detecta conexión a internet. Algunas operaciones pueden fallar."
         read -r -p "¿Desea continuar sin conexión a internet? (yes/no) " response
         [[ "$response" != "yes" ]] && exit 1
     fi
-    
     # ✅ Verificación final antes de instalar
     print_message "$CYAN" "Verificación final de archivos de configuración:"
     print_message "$GREEN" "✓ system.scm: $MOUNT_POINT/etc/system.scm"
     print_message "$GREEN" "✓ channels.scm: $MOUNT_POINT/etc/channels.scm"
     print_message "$GREEN" "✓ cow-store: inicializado en $MOUNT_POINT"
-    
     if [ -f "$MOUNT_POINT/etc/guix-install-vars" ]; then
         print_message "$GREEN" "✓ Variables de instalación: $MOUNT_POINT/etc/guix-install-vars"
     fi
 }
-
 install_guix_system() {
     print_message "$GREEN" "Iniciando instalación de Guix System..."
     if [ ! -f "$MOUNT_POINT/etc/system.scm" ]; then
@@ -1476,7 +1402,6 @@ install_guix_system() {
         print_message "$YELLOW" "Por favor, asegúrese de que $MOUNT_POINT/etc/system.scm existe."
         exit 1
     fi
-
     local substitute_urls="https://ci.guix.gnu.org https://bordeaux.guix.gnu.org"
     if [ "$use_nonguix" = "yes" ]; then
         if curl -sfI --max-time 3 https://substitutes.nonguix.org &>/dev/null; then
@@ -1487,28 +1412,22 @@ install_guix_system() {
     fi
     print_message "$YELLOW" "Usando servidores de sustitución: $substitute_urls"
     print_message "$CYAN" "Instalando Guix System. Esto puede tomar varios minutos..."
-
     # ✅ Intento 1: con --fallback
     if ! guix system init "$MOUNT_POINT/etc/system.scm" "$MOUNT_POINT" \
         --substitute-urls="$substitute_urls" \
         --fallback; then
-
         print_message "$RED" "Error durante la instalación principal."
         print_message "$YELLOW" "Intentando con --no-grafts..."
-
         # ✅ Intento 2: con --no-grafts y --fallback
         if ! guix system init "$MOUNT_POINT/etc/system.scm" "$MOUNT_POINT" \
             --substitute-urls="$substitute_urls" \
             --no-grafts --fallback; then
-
             print_message "$RED" "Error durante la instalación con --no-grafts."
             exit 1
         fi
     fi
-
     print_message "$GREEN" "¡Instalación completada exitosamente!"
 }
-
 # =============================================================================
 # VERIFICACIONES
 # =============================================================================
@@ -1545,19 +1464,16 @@ check_requirements() {
         [[ "$response" != "yes" ]] && exit 1
     fi
 }
-
 # =============================================================================
 # LIMPIEZA ROBUSTA
 # =============================================================================
 robust_cleanup() {
     print_message "$YELLOW" "Realizando limpieza exhaustiva..."
-    
     # ✅ CORRECCIÓN: Detener cow-store si está activo
     if herd status cow-store >/dev/null 2>&1; then
         print_message "$CYAN" "Deteniendo cow-store..."
         herd stop cow-store 2>/dev/null || true
     fi
-    
     # Cerrar particiones encriptadas
     if [ "$ENCRYPT_DISK" = "yes" ] && [ -b "/dev/mapper/$ENCRYPTED_NAME" ]; then
         cryptsetup close "$ENCRYPTED_NAME" || true
@@ -1588,16 +1504,13 @@ robust_cleanup() {
     rm -f "$MOUNT_POINT/etc/guix-install-vars" 2>/dev/null || true
     print_message "$GREEN" "✓ Limpieza completada"
 }
-
 # =============================================================================
 # FUNCIÓN PRINCIPAL
 # =============================================================================
 main() {
     trap robust_cleanup EXIT
-    
     # Detectar dispositivo de instalación al inicio
     detect_installation_device
-    
     check_requirements
     check_system_requirements
     if ! setup_network_connection; then
@@ -1666,13 +1579,11 @@ main() {
     print_message "$GREEN" "   - Gestor de aplicaciones Flatpak: Discover"
     print_message "$CYAN" "=============================================="
 }
-
 # Verificar que estamos en el entorno live de Guix
 if ! command -v guix >/dev/null 2>&1; then
     echo "ERROR: Este script debe ejecutarse desde el entorno de instalación de Guix."
     echo "Por favor, arranque desde el ISO de nonguix."
     exit 1
 fi
-
 # Ejecutar función principal
 main "$@"
