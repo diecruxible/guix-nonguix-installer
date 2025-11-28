@@ -1456,13 +1456,6 @@ check_requirements() {
         read -r -p "¿Continuar de todas formas? (yes/no) " response
         [[ "$response" != "yes" ]] && exit 1
     fi
-    local free_space
-    free_space=$(df -BG / | awk 'NR==2 {print $4}' | tr -d 'G')
-    if [ "$free_space" -lt 10 ]; then
-        print_message "$YELLOW" "ADVERTENCIA: Espacio libre en disco bajo ($free_space GB). Se recomiendan al menos 10 GB."
-        read -r -p "¿Desea continuar? (yes/no) " response
-        [[ "$response" != "yes" ]] && exit 1
-    fi
 }
 # =============================================================================
 # LIMPIEZA ROBUSTA
